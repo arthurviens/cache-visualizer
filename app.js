@@ -2,33 +2,114 @@
  * Matrix Tiling and Cache Behavior Visualizer
  *
  * An educational tool for visualizing how iteration orders, tiling strategies,
- * and data layouts affect cache behavior during matrix multiplication.
- *
- * @author Claude (with user guidance)
+ * and data layouts affect cache behavior during matrix operations.
  */
 
 // =============================================================================
-// CONFIGURATION & CONSTANTS
+// OPERATION ABSTRACTION
+// =============================================================================
+//
+// An Operation defines:
+// - tensors: The tensors involved (name, dimensions, base address)
+// - loopDims: The loop dimensions (e.g., ['i', 'j', 'k'] for matmul)
+// - getAccesses(indices): Given loop indices, returns array of memory accesses
+// - codeTemplate: How to display the inner statement
+// - describeOp(indices): Human-readable description of current operation
+//
+// This abstraction allows adding new operations (convolution, etc.) without
+// changing the core simulation logic.
+// =============================================================================
+
+/**
+ * Creates the matrix multiplication operation.
+ * C[i][j] += A[i][k] * B[k][j]
+ *
+ * @param {number} size - Matrix dimension (e.g., 12)
+ * @param {number} elementSize - Bytes per element (e.g., 4)
+ * @returns {Object} Operation definition
+ */
+function createMatmulOperation(size, elementSize) {
+    const elementsPerMatrix = size * size;
+
+    return {
+        name: 'matmul',
+        displayName: 'Matrix Multiplication',
+        size: size,
+        elementSize: elementSize,
+
+        // Loop dimensions for this operation
+        loopDims: ['i', 'j', 'k'],
+
+        // All valid loop orderings
+        loopOrders: {
+            'ijk': ['i', 'j', 'k'],
+            'ikj': ['i', 'k', 'j'],
+            'jik': ['j', 'i', 'k'],
+            'jki': ['j', 'k', 'i'],
+            'kij': ['k', 'i', 'j'],
+            'kji': ['k', 'j', 'i']
+        },
+
+        // Tensor definitions
+        // Each tensor has: name, baseAddress, accessIndices (which loop vars index it)
+        tensors: [
+            {
+                name: 'A',
+                baseAddress: 0,
+                rows: size,
+                cols: size,
+                // A[i][k] - row is i, col is k
+                getIndices: (iter) => ({ row: iter.i, col: iter.k })
+            },
+            {
+                name: 'B',
+                baseAddress: elementsPerMatrix * elementSize,
+                rows: size,
+                cols: size,
+                // B[k][j] - row is k, col is j
+                getIndices: (iter) => ({ row: iter.k, col: iter.j })
+            },
+            {
+                name: 'C',
+                baseAddress: 2 * elementsPerMatrix * elementSize,
+                rows: size,
+                cols: size,
+                // C[i][j] - row is i, col is j
+                getIndices: (iter) => ({ row: iter.i, col: iter.j })
+            }
+        ],
+
+        // Inner statement for code display
+        codeTemplate: 'C[i][j] += A[i][k] * B[k][j]',
+
+        // Human-readable operation description
+        describeOp: (iter) => `A[${iter.i}][${iter.k}] × B[${iter.k}][${iter.j}] → C[${iter.i}][${iter.j}]`,
+
+        // Total iterations
+        getTotalIterations: () => size * size * size
+    };
+}
+
+// =============================================================================
+// CONSTANTS
 // =============================================================================
 
 const MATRIX_SIZE = 12;
-const ELEMENT_SIZE = 4; // bytes per element (float/int32)
+const ELEMENT_SIZE = 4; // bytes per element
 const CACHE_LINE_SIZE = 64; // bytes per cache line
-const TOTAL_ITERATIONS = MATRIX_SIZE * MATRIX_SIZE * MATRIX_SIZE; // 1728
 
-// Base addresses for matrices in simulated memory (non-overlapping regions)
-const BASE_A = 0;
-const BASE_B = MATRIX_SIZE * MATRIX_SIZE * ELEMENT_SIZE; // 576
-const BASE_C = 2 * MATRIX_SIZE * MATRIX_SIZE * ELEMENT_SIZE; // 1152
+// Create the operation (can be swapped for different operations in the future)
+const operation = createMatmulOperation(MATRIX_SIZE, ELEMENT_SIZE);
+
+const TOTAL_ITERATIONS = operation.getTotalIterations();
 
 // Rendering constants
-const CELL_SIZE = 20; // pixels per cell (240px canvas / 12 cells)
+const CELL_SIZE = 20; // pixels per cell
 const COLORS = {
     background: '#ffffff',
     grid: '#cccccc',
     tileGrid: '#666666',
     cached: 'rgba(220, 53, 69, 0.6)',
-    cachedLight: 'rgba(220, 53, 69, 0.3)',
     current: '#000000',
     currentOutline: '#667eea'
 };
@@ -37,73 +118,76 @@ const COLORS = {
 // APPLICATION STATE
 // =============================================================================
 
+/**
+ * Initialize tensor state (layouts, stats) from operation definition.
+ */
+function createTensorState(op) {
+    const layouts = {};
+    const stats = {};
+
+    for (const tensor of op.tensors) {
+        layouts[tensor.name] = 'row'; // default to row-major
+        stats[tensor.name] = { accesses: 0, hits: 0 };
+    }
+
+    return { layouts, stats };
+}
+
+const tensorState = createTensorState(operation);
+
 const state = {
     // Configuration (from UI)
     loopOrder: 'ijk',
     tilingEnabled: false,
     tileSize: 4,
-    layoutA: 'row',
-    layoutB: 'row',
-    layoutC: 'row',
+    layouts: tensorState.layouts,  // { A: 'row', B: 'row', C: 'row' }
     cacheSize: 256,
 
     // Simulation state
     currentIteration: 0,
     isPlaying: false,
-    speed: 10, // iterations per second
+    speed: 10,
 
     // Generated data
     iterations: [],
     cache: null,
 
-    // Statistics
-    stats: {
-        A: { accesses: 0, hits: 0 },
-        B: { accesses: 0, hits: 0 },
-        C: { accesses: 0, hits: 0 }
-    },
+    // Statistics (per-tensor)
+    stats: tensorState.stats,  // { A: {accesses, hits}, B: {...}, C: {...} }
 
-    // History for timeline visualization
-    history: []
+    // History for timeline
+    history: []  // Array of { A: hit/miss, B: hit/miss, C: hit/miss }
 };
 
-// Canvas contexts (initialized on load)
-let ctxA, ctxB, ctxC, ctxTimeline;
+// Canvas contexts
+let canvasContexts = {};  // { A: ctx, B: ctx, C: ctx }
+let ctxTimeline;
 
 // Animation state
 let animationId = null;
 let lastFrameTime = 0;
-let snapshots = []; // For step-backward functionality
+let snapshots = [];
 
 // =============================================================================
 // ITERATION GENERATOR
 // =============================================================================
 
 /**
- * Generates the sequence of (i, j, k) index tuples for non-tiled matrix multiplication.
+ * Generate iteration sequence for non-tiled execution.
  *
- * The loop order determines which index varies fastest (innermost loop).
- * For example, 'ijk' means: for i { for j { for k { ... } } }
- *
- * @param {string} loopOrder - One of: 'ijk', 'ikj', 'jik', 'jki', 'kij', 'kji'
- * @param {number} size - Matrix dimension
- * @returns {Array<{i: number, j: number, k: number}>}
+ * @param {Object} op - Operation definition
+ * @param {string} loopOrder - Loop nesting order (e.g., 'ijk')
+ * @returns {Array} Sequence of index objects
  */
-function generateIterations(loopOrder, size) {
+function generateIterations(op, loopOrder) {
     const iterations = [];
-    const loopOrders = {
-        'ijk': ['i', 'j', 'k'],
-        'ikj': ['i', 'k', 'j'],
-        'jik': ['j', 'i', 'k'],
-        'jki': ['j', 'k', 'i'],
-        'kij': ['k', 'i', 'j'],
-        'kji': ['k', 'j', 'i']
-    };
+    const order = op.loopOrders[loopOrder];
 
-    const order = loopOrders[loopOrder];
     if (!order) {
         throw new Error(`Unknown loop order: ${loopOrder}`);
     }
+
+    const size = op.size;
 
     for (let outer = 0; outer < size; outer++) {
         for (let middle = 0; middle < size; middle++) {
@@ -112,7 +196,13 @@ function generateIterations(loopOrder, size) {
                 indices[order[0]] = outer;
                 indices[order[1]] = middle;
                 indices[order[2]] = inner;
-                iterations.push({ i: indices.i, j: indices.j, k: indices.k });
+
+                // Create iteration object with all loop dimensions
+                const iter = {};
+                for (const dim of op.loopDims) {
+                    iter[dim] = indices[dim];
+                }
+                iterations.push(iter);
             }
         }
     }
@@ -121,64 +211,33 @@ function generateIterations(loopOrder, size) {
 }
 
 /**
- * Returns the loop variable order for display purposes.
- * @param {string} loopOrder
- * @returns {Array<string>}
- */
-function getLoopOrderArray(loopOrder) {
-    const orders = {
-        'ijk': ['i', 'j', 'k'],
-        'ikj': ['i', 'k', 'j'],
-        'jik': ['j', 'i', 'k'],
-        'jki': ['j', 'k', 'i'],
-        'kij': ['k', 'i', 'j'],
-        'kji': ['k', 'j', 'i']
-    };
-    return orders[loopOrder] || ['i', 'j', 'k'];
-}
-
-/**
- * Generates index tuples for TILED matrix multiplication.
+ * Generate iteration sequence for tiled execution.
  *
- * Tiled iteration uses 6 nested loops:
- * - 3 outer tile loops (ti, tj, tk) stepping by tileSize
- * - 3 inner loops (i, j, k) within each tile
- *
+ * @param {Object} op - Operation definition
  * @param {string} loopOrder - Loop nesting order
- * @param {number} size - Matrix dimension
  * @param {number} tileSize - Tile dimension
- * @returns {Array<{i, j, k, ti, tj, tk, li, lj, lk}>}
+ * @returns {Array} Sequence of index objects with tile info
  */
-function generateTiledIterations(loopOrder, size, tileSize) {
+function generateTiledIterations(op, loopOrder, tileSize) {
     const iterations = [];
-    const orderMap = {
-        'ijk': ['i', 'j', 'k'],
-        'ikj': ['i', 'k', 'j'],
-        'jik': ['j', 'i', 'k'],
-        'jki': ['j', 'k', 'i'],
-        'kij': ['k', 'i', 'j'],
-        'kji': ['k', 'j', 'i']
-    };
+    const order = op.loopOrders[loopOrder];
 
-    const order = orderMap[loopOrder];
     if (!order) {
         throw new Error(`Unknown loop order: ${loopOrder}`);
     }
 
+    const size = op.size;
     const numTiles = size / tileSize;
 
     // Outer tile loops
     for (let tOuter = 0; tOuter < numTiles; tOuter++) {
         for (let tMiddle = 0; tMiddle < numTiles; tMiddle++) {
             for (let tInner = 0; tInner < numTiles; tInner++) {
+                // Calculate tile base indices
                 const tileIndices = {};
                 tileIndices['t' + order[0]] = tOuter * tileSize;
                 tileIndices['t' + order[1]] = tMiddle * tileSize;
                 tileIndices['t' + order[2]] = tInner * tileSize;
-
-                const ti = tileIndices.ti;
-                const tj = tileIndices.tj;
-                const tk = tileIndices.tk;
 
                 // Inner element loops
                 for (let eOuter = 0; eOuter < tileSize; eOuter++) {
@@ -189,15 +248,15 @@ function generateTiledIterations(loopOrder, size, tileSize) {
                             elemIndices[order[1]] = eMiddle;
                             elemIndices[order[2]] = eInner;
 
-                            iterations.push({
-                                i: ti + elemIndices.i,
-                                j: tj + elemIndices.j,
-                                k: tk + elemIndices.k,
-                                ti, tj, tk,
-                                li: elemIndices.i,
-                                lj: elemIndices.j,
-                                lk: elemIndices.k
-                            });
+                            // Build iteration object
+                            const iter = {};
+                            for (const dim of op.loopDims) {
+                                const tileBase = tileIndices['t' + dim];
+                                iter[dim] = tileBase + elemIndices[dim];
+                                iter['t' + dim] = tileBase;  // tile base
+                                iter['l' + dim] = elemIndices[dim];  // local offset
+                            }
+                            iterations.push(iter);
                         }
                     }
                 }
@@ -209,13 +268,13 @@ function generateTiledIterations(loopOrder, size, tileSize) {
 }
 
 /**
- * Generates iterations based on current configuration.
+ * Generate all iterations based on current configuration.
  */
 function generateAllIterations() {
     if (state.tilingEnabled) {
-        return generateTiledIterations(state.loopOrder, MATRIX_SIZE, state.tileSize);
+        return generateTiledIterations(operation, state.loopOrder, state.tileSize);
     }
-    return generateIterations(state.loopOrder, MATRIX_SIZE);
+    return generateIterations(operation, state.loopOrder);
 }
 
 // =============================================================================
@@ -224,46 +283,33 @@ function generateAllIterations() {
 
 /**
  * LRU Cache Simulator
- *
- * Simulates a simple cache with:
- * - Configurable capacity
- * - Fixed cache line size (64 bytes = 16 elements)
- * - LRU (Least Recently Used) eviction policy
  */
 class CacheSimulator {
     constructor(capacityBytes, lineSize = CACHE_LINE_SIZE) {
         this.capacityBytes = capacityBytes;
         this.lineSize = lineSize;
         this.maxLines = Math.floor(capacityBytes / lineSize);
-        this.lines = []; // LRU order: front = oldest, back = newest
+        this.lines = [];
         this.totalAccesses = 0;
         this.hits = 0;
         this.misses = 0;
     }
 
-    /**
-     * Get cache line base address for a memory address.
-     */
     getLineAddress(address) {
         return Math.floor(address / this.lineSize) * this.lineSize;
     }
 
-    /**
-     * Access a memory address. Returns true for hit, false for miss.
-     */
     access(address) {
         this.totalAccesses++;
         const lineAddr = this.getLineAddress(address);
         const index = this.lines.indexOf(lineAddr);
 
         if (index !== -1) {
-            // Hit: move to MRU position
             this.lines.splice(index, 1);
             this.lines.push(lineAddr);
             this.hits++;
             return true;
         } else {
-            // Miss: evict LRU if full, add new line
             this.misses++;
             if (this.lines.length >= this.maxLines) {
                 this.lines.shift();
@@ -273,9 +319,6 @@ class CacheSimulator {
         }
     }
 
-    /**
-     * Check if address is cached (without affecting LRU order).
-     */
     isAddressCached(address) {
         const lineAddr = this.getLineAddress(address);
         return this.lines.includes(lineAddr);
@@ -297,11 +340,11 @@ class CacheSimulator {
         };
     }
 
-    restore(snapshot) {
-        this.lines = [...snapshot.lines];
-        this.totalAccesses = snapshot.totalAccesses;
-        this.hits = snapshot.hits;
-        this.misses = snapshot.misses;
+    restore(snap) {
+        this.lines = [...snap.lines];
+        this.totalAccesses = snap.totalAccesses;
+        this.hits = snap.hits;
+        this.misses = snap.misses;
     }
 }
 
@@ -310,54 +353,42 @@ class CacheSimulator {
 // =============================================================================
 
 /**
- * Calculate memory address for a matrix element.
+ * Calculate memory address for a tensor element.
  *
+ * @param {Object} tensor - Tensor definition from operation
  * @param {number} row - Row index
  * @param {number} col - Column index
- * @param {number} baseAddress - Matrix base address
- * @param {string} layout - 'row' for row-major, 'col' for column-major
+ * @param {string} layout - 'row' or 'col'
+ * @returns {number} Memory address in bytes
  */
-function getAddress(row, col, baseAddress, layout) {
+function getTensorAddress(tensor, row, col, layout) {
+    const size = operation.size;
     if (layout === 'col') {
-        // Column-major: elements in same column are contiguous
-        return baseAddress + (col * MATRIX_SIZE + row) * ELEMENT_SIZE;
+        return tensor.baseAddress + (col * size + row) * operation.elementSize;
     }
-    // Row-major: elements in same row are contiguous
-    return baseAddress + (row * MATRIX_SIZE + col) * ELEMENT_SIZE;
-}
-
-function getAddressA(i, k) {
-    return getAddress(i, k, BASE_A, state.layoutA);
-}
-
-function getAddressB(k, j) {
-    return getAddress(k, j, BASE_B, state.layoutB);
-}
-
-function getAddressC(i, j) {
-    return getAddress(i, j, BASE_C, state.layoutC);
+    return tensor.baseAddress + (row * size + col) * operation.elementSize;
 }
 
 /**
- * Check if a matrix element is currently in cache.
+ * Get memory address for a tensor access given current iteration.
  */
-function isElementInCache(matrix, row, col) {
+function getAccessAddress(tensor, iter) {
+    const indices = tensor.getIndices(iter);
+    const layout = state.layouts[tensor.name];
+    return getTensorAddress(tensor, indices.row, indices.col, layout);
+}
+
+/**
+ * Check if a tensor element is in cache.
+ */
+function isElementInCache(tensorName, row, col) {
     if (!state.cache) return false;
 
-    let address;
-    switch (matrix) {
-        case 'A':
-            address = getAddress(row, col, BASE_A, state.layoutA);
-            break;
-        case 'B':
-            address = getAddress(row, col, BASE_B, state.layoutB);
-            break;
-        case 'C':
-            address = getAddress(row, col, BASE_C, state.layoutC);
-            break;
-        default:
-            return false;
-    }
+    const tensor = operation.tensors.find(t => t.name === tensorName);
+    if (!tensor) return false;
+
+    const layout = state.layouts[tensorName];
+    const address = getTensorAddress(tensor, row, col, layout);
     return state.cache.isAddressCached(address);
 }
 
@@ -366,24 +397,32 @@ function isElementInCache(matrix, row, col) {
 // =============================================================================
 
 /**
- * Initialize canvas contexts.
+ * Initialize canvas contexts for all tensors.
  */
 function initCanvases() {
-    ctxA = document.getElementById('matrixA').getContext('2d');
-    ctxB = document.getElementById('matrixB').getContext('2d');
-    ctxC = document.getElementById('matrixC').getContext('2d');
-    ctxTimeline = document.getElementById('timeline').getContext('2d');
+    for (const tensor of operation.tensors) {
+        const canvas = document.getElementById('matrix' + tensor.name);
+        if (canvas) {
+            canvasContexts[tensor.name] = canvas.getContext('2d');
+        }
+    }
 
+    ctxTimeline = document.getElementById('timeline').getContext('2d');
     const timelineCanvas = document.getElementById('timeline');
     timelineCanvas.width = timelineCanvas.offsetWidth;
     timelineCanvas.height = 60;
 }
 
 /**
- * Render a single matrix grid.
+ * Render a single tensor grid.
  */
-function renderMatrix(ctx, matrixName, currentRow, currentCol) {
+function renderTensor(tensorName, currentRow, currentCol) {
+    const ctx = canvasContexts[tensorName];
+    if (!ctx) return;
+
     const canvas = ctx.canvas;
+    const size = operation.size;
+
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     // Background
@@ -392,9 +431,9 @@ function renderMatrix(ctx, matrixName, currentRow, currentCol) {
 
     // Cached elements
     if (state.cache) {
-        for (let row = 0; row < MATRIX_SIZE; row++) {
-            for (let col = 0; col < MATRIX_SIZE; col++) {
-                if (isElementInCache(matrixName, row, col)) {
+        for (let row = 0; row < size; row++) {
+            for (let col = 0; col < size; col++) {
+                if (isElementInCache(tensorName, row, col)) {
                     ctx.fillStyle = COLORS.cached;
                     ctx.fillRect(col * CELL_SIZE, row * CELL_SIZE, CELL_SIZE, CELL_SIZE);
                 }
@@ -405,7 +444,7 @@ function renderMatrix(ctx, matrixName, currentRow, currentCol) {
     // Grid lines
     ctx.strokeStyle = COLORS.grid;
     ctx.lineWidth = 1;
-    for (let i = 0; i <= MATRIX_SIZE; i++) {
+    for (let i = 0; i <= size; i++) {
         ctx.beginPath();
         ctx.moveTo(i * CELL_SIZE, 0);
         ctx.lineTo(i * CELL_SIZE, canvas.height);
@@ -420,7 +459,7 @@ function renderMatrix(ctx, matrixName, currentRow, currentCol) {
     if (state.tilingEnabled && state.tileSize > 1) {
         ctx.strokeStyle = COLORS.tileGrid;
         ctx.lineWidth = 2;
-        for (let i = 0; i <= MATRIX_SIZE; i += state.tileSize) {
+        for (let i = 0; i <= size; i += state.tileSize) {
             ctx.beginPath();
             ctx.moveTo(i * CELL_SIZE, 0);
             ctx.lineTo(i * CELL_SIZE, canvas.height);
@@ -443,18 +482,18 @@ function renderMatrix(ctx, matrixName, currentRow, currentCol) {
 }
 
 /**
- * Render all three matrices.
+ * Render all tensors.
  */
-function renderAllMatrices() {
+function renderAllTensors() {
     const iter = state.iterations[state.currentIteration];
-    if (iter) {
-        renderMatrix(ctxA, 'A', iter.i, iter.k);
-        renderMatrix(ctxB, 'B', iter.k, iter.j);
-        renderMatrix(ctxC, 'C', iter.i, iter.j);
-    } else {
-        renderMatrix(ctxA, 'A', null, null);
-        renderMatrix(ctxB, 'B', null, null);
-        renderMatrix(ctxC, 'C', null, null);
+
+    for (const tensor of operation.tensors) {
+        if (iter) {
+            const indices = tensor.getIndices(iter);
+            renderTensor(tensor.name, indices.row, indices.col);
+        } else {
+            renderTensor(tensor.name, null, null);
+        }
     }
 }
 
@@ -465,22 +504,23 @@ function renderTimeline() {
     const canvas = ctxTimeline.canvas;
     const width = canvas.width;
     const height = canvas.height;
+    const numTensors = operation.tensors.length;
 
     ctxTimeline.fillStyle = '#1a1a2e';
     ctxTimeline.fillRect(0, 0, width, height);
 
     if (state.history.length === 0) return;
 
-    const rowHeight = height / 3;
+    const rowHeight = height / numTensors;
     const labelOffset = 15;
     const barWidthScaled = (width - labelOffset) / TOTAL_ITERATIONS;
 
     // Labels
     ctxTimeline.fillStyle = '#666';
     ctxTimeline.font = '10px monospace';
-    ctxTimeline.fillText('A', 2, rowHeight / 2 + 3);
-    ctxTimeline.fillText('B', 2, rowHeight + rowHeight / 2 + 3);
-    ctxTimeline.fillText('C', 2, 2 * rowHeight + rowHeight / 2 + 3);
+    operation.tensors.forEach((tensor, idx) => {
+        ctxTimeline.fillText(tensor.name, 2, idx * rowHeight + rowHeight / 2 + 3);
+    });
 
     // History bars
     for (let i = 0; i < state.history.length; i++) {
@@ -488,14 +528,10 @@ function renderTimeline() {
         const h = state.history[i];
         const barW = Math.max(1, barWidthScaled - 0.5);
 
-        ctxTimeline.fillStyle = h.A ? '#dc3545' : '#333';
-        ctxTimeline.fillRect(x, 2, barW, rowHeight - 4);
-
-        ctxTimeline.fillStyle = h.B ? '#dc3545' : '#333';
-        ctxTimeline.fillRect(x, rowHeight + 2, barW, rowHeight - 4);
-
-        ctxTimeline.fillStyle = h.C ? '#dc3545' : '#333';
-        ctxTimeline.fillRect(x, 2 * rowHeight + 2, barW, rowHeight - 4);
+        operation.tensors.forEach((tensor, idx) => {
+            ctxTimeline.fillStyle = h[tensor.name] ? '#dc3545' : '#333';
+            ctxTimeline.fillRect(x, idx * rowHeight + 2, barW, rowHeight - 4);
+        });
     }
 
     // Current position indicator
@@ -514,21 +550,36 @@ function renderTimeline() {
  * Update statistics display.
  */
 function updateStatsDisplay() {
-    document.getElementById('statsA').textContent = `mem:${state.stats.A.accesses} hit:${state.stats.A.hits}`;
-    document.getElementById('statsB').textContent = `mem:${state.stats.B.accesses} hit:${state.stats.B.hits}`;
-    document.getElementById('statsC').textContent = `mem:${state.stats.C.accesses} hit:${state.stats.C.hits}`;
+    // Per-tensor stats in header
+    for (const tensor of operation.tensors) {
+        const statsEl = document.getElementById('stats' + tensor.name);
+        if (statsEl) {
+            const s = state.stats[tensor.name];
+            statsEl.textContent = `mem:${s.accesses} hit:${s.hits}`;
+        }
+    }
 
-    const totalAccesses = state.stats.A.accesses + state.stats.B.accesses + state.stats.C.accesses;
-    const totalHits = state.stats.A.hits + state.stats.B.hits + state.stats.C.hits;
+    // Overall stats
+    let totalAccesses = 0;
+    let totalHits = 0;
+    for (const tensor of operation.tensors) {
+        totalAccesses += state.stats[tensor.name].accesses;
+        totalHits += state.stats[tensor.name].hits;
+    }
     const hitRate = totalAccesses > 0 ? (totalHits / totalAccesses * 100).toFixed(0) : 0;
 
     document.getElementById('totalMem').textContent = totalAccesses;
     document.getElementById('totalHits').textContent = totalHits;
     document.getElementById('hitRate').textContent = hitRate + '%';
 
-    document.getElementById('detailStatsA').textContent = `${state.stats.A.hits}/${state.stats.A.accesses} hits`;
-    document.getElementById('detailStatsB').textContent = `${state.stats.B.hits}/${state.stats.B.accesses} hits`;
-    document.getElementById('detailStatsC').textContent = `${state.stats.C.hits}/${state.stats.C.accesses} hits`;
+    // Detailed per-tensor stats
+    for (const tensor of operation.tensors) {
+        const detailEl = document.getElementById('detailStats' + tensor.name);
+        if (detailEl) {
+            const s = state.stats[tensor.name];
+            detailEl.textContent = `${s.hits}/${s.accesses} hits`;
+        }
+    }
 }
 
 /**
@@ -540,14 +591,18 @@ function updateStateDisplay() {
     document.getElementById('currentIteration').textContent = `${state.currentIteration} of ${TOTAL_ITERATIONS}`;
 
     if (iter) {
+        // Build indices string
+        let indicesStr = '';
         if (state.tilingEnabled && iter.ti !== undefined) {
-            document.getElementById('currentIndices').textContent =
-                `ti=${iter.ti}, tj=${iter.tj}, tk=${iter.tk}, i=${iter.i}, j=${iter.j}, k=${iter.k}`;
+            // Show tile indices first, then element indices
+            const tileParts = operation.loopDims.map(d => `t${d}=${iter['t' + d]}`);
+            const elemParts = operation.loopDims.map(d => `${d}=${iter[d]}`);
+            indicesStr = tileParts.join(', ') + ', ' + elemParts.join(', ');
         } else {
-            document.getElementById('currentIndices').textContent = `i=${iter.i}, j=${iter.j}, k=${iter.k}`;
+            indicesStr = operation.loopDims.map(d => `${d}=${iter[d]}`).join(', ');
         }
-        document.getElementById('currentOp').textContent =
-            `A[${iter.i}][${iter.k}] × B[${iter.k}][${iter.j}] → C[${iter.i}][${iter.j}]`;
+        document.getElementById('currentIndices').textContent = indicesStr;
+        document.getElementById('currentOp').textContent = operation.describeOp(iter);
     } else {
         document.getElementById('currentIndices').textContent = '-';
         document.getElementById('currentOp').textContent = '-';
@@ -561,7 +616,7 @@ function updateStateDisplay() {
  * Full render of all visualization components.
  */
 function render() {
-    renderAllMatrices();
+    renderAllTensors();
     renderTimeline();
     updateStatsDisplay();
     updateStateDisplay();
@@ -573,6 +628,7 @@ function render() {
 
 /**
  * Execute one simulation step.
+ * Uses the operation abstraction to determine memory accesses.
  */
 function executeStep() {
     if (state.currentIteration >= state.iterations.length) {
@@ -580,23 +636,18 @@ function executeStep() {
     }
 
     const iter = state.iterations[state.currentIteration];
+    const result = {};
 
-    const addrA = getAddressA(iter.i, iter.k);
-    const addrB = getAddressB(iter.k, iter.j);
-    const addrC = getAddressC(iter.i, iter.j);
+    // Access each tensor according to the operation's access pattern
+    for (const tensor of operation.tensors) {
+        const address = getAccessAddress(tensor, iter);
+        const hit = state.cache.access(address);
 
-    const hitA = state.cache.access(addrA);
-    const hitB = state.cache.access(addrB);
-    const hitC = state.cache.access(addrC);
+        state.stats[tensor.name].accesses++;
+        state.stats[tensor.name].hits += hit ? 1 : 0;
+        result[tensor.name] = hit;
+    }
 
-    state.stats.A.accesses++;
-    state.stats.A.hits += hitA ? 1 : 0;
-    state.stats.B.accesses++;
-    state.stats.B.hits += hitB ? 1 : 0;
-    state.stats.C.accesses++;
-    state.stats.C.hits += hitC ? 1 : 0;
-
-    const result = { A: hitA, B: hitB, C: hitC };
     state.history.push(result);
     state.currentIteration++;
 
@@ -612,11 +663,11 @@ function resetSimulation() {
     state.currentIteration = 0;
     state.history = [];
     snapshots = [];
-    state.stats = {
-        A: { accesses: 0, hits: 0 },
-        B: { accesses: 0, hits: 0 },
-        C: { accesses: 0, hits: 0 }
-    };
+
+    // Reset stats for all tensors
+    for (const tensor of operation.tensors) {
+        state.stats[tensor.name] = { accesses: 0, hits: 0 };
+    }
 
     if (state.cache) {
         state.cache.reset();
@@ -628,7 +679,7 @@ function resetSimulation() {
 }
 
 /**
- * Jump to a specific iteration (requires replay from start if going backward).
+ * Jump to a specific iteration.
  */
 function jumpToIteration(targetIteration) {
     targetIteration = Math.max(0, Math.min(targetIteration, state.iterations.length));
@@ -690,7 +741,6 @@ function animate(timestamp) {
 
     if (elapsed >= interval) {
         if (state.currentIteration < state.iterations.length) {
-            // Limit snapshot history to prevent memory issues
             if (snapshots.length > 100) {
                 snapshots = snapshots.slice(-50);
             }
@@ -749,10 +799,15 @@ function applyConfiguration() {
     state.loopOrder = document.getElementById('loopOrder').value;
     state.tilingEnabled = document.getElementById('tilingEnabled').checked;
     state.tileSize = parseInt(document.getElementById('tileSize').value);
-    state.layoutA = document.getElementById('layoutA').value;
-    state.layoutB = document.getElementById('layoutB').value;
-    state.layoutC = document.getElementById('layoutC').value;
     state.cacheSize = parseInt(document.getElementById('cacheSize').value) || 256;
+
+    // Read layouts for all tensors
+    for (const tensor of operation.tensors) {
+        const layoutEl = document.getElementById('layout' + tensor.name);
+        if (layoutEl) {
+            state.layouts[tensor.name] = layoutEl.value;
+        }
+    }
 
     state.iterations = generateAllIterations();
     state.cache = new CacheSimulator(state.cacheSize);
@@ -765,11 +820,18 @@ function applyConfiguration() {
 // =============================================================================
 
 /**
+ * Get the loop order array for the current configuration.
+ */
+function getLoopOrderArray() {
+    return operation.loopOrders[state.loopOrder] || operation.loopDims;
+}
+
+/**
  * Update the loop code display.
  */
 function updateCodeDisplay() {
     const codeDiv = document.getElementById('codeDisplay');
-    const order = getLoopOrderArray(state.loopOrder);
+    const order = getLoopOrderArray();
 
     if (state.tilingEnabled) {
         codeDiv.innerHTML = generateTiledCodeHTML(order, state.tileSize);
@@ -783,26 +845,28 @@ function updateCodeDisplay() {
  */
 function generateNonTiledCodeHTML(order) {
     const iter = state.iterations[state.currentIteration];
+    const size = operation.size;
     let html = '';
     const indent = ['', '  ', '    ', '      '];
+    const numLoops = order.length;
 
-    for (let level = 0; level < 3; level++) {
+    for (let level = 0; level < numLoops; level++) {
         const varName = order[level];
-        const isInnermost = level === 2;
+        const isInnermost = level === numLoops - 1;
         const isCurrent = isInnermost && state.currentIteration < state.iterations.length;
 
         html += `<div class="code-line${isCurrent ? ' current' : ''}">`;
         html += `${indent[level]}<span class="code-keyword">for</span> `;
         html += `<span class="code-var">${varName}</span> `;
         html += `<span class="code-keyword">in</span> `;
-        html += `<span class="code-number">0</span>..<span class="code-number">${MATRIX_SIZE}</span>:`;
+        html += `<span class="code-number">0</span>..<span class="code-number">${size}</span>:`;
         if (isCurrent && iter) {
             html += ` <span class="code-comment">← ${varName}=${iter[varName]}</span>`;
         }
         html += '</div>';
     }
 
-    html += `<div class="code-line">${indent[3]}C[i][j] += A[i][k] * B[k][j]</div>`;
+    html += `<div class="code-line">${indent[numLoops]}${operation.codeTemplate}</div>`;
     return html;
 }
 
@@ -811,17 +875,19 @@ function generateNonTiledCodeHTML(order) {
  */
 function generateTiledCodeHTML(order, tileSize) {
     const iter = state.iterations[state.currentIteration];
+    const size = operation.size;
     const indent = ['', '  ', '    ', '      ', '        ', '          ', '            '];
+    const numLoops = order.length;
     let html = '';
 
     // Tile loops
-    for (let level = 0; level < 3; level++) {
+    for (let level = 0; level < numLoops; level++) {
         const varName = 't' + order[level];
         html += `<div class="code-line">`;
         html += `${indent[level]}<span class="code-keyword">for</span> `;
         html += `<span class="code-var">${varName}</span> `;
         html += `<span class="code-keyword">in</span> `;
-        html += `<span class="code-number">0</span>..<span class="code-number">${MATRIX_SIZE}</span> `;
+        html += `<span class="code-number">0</span>..<span class="code-number">${size}</span> `;
         html += `<span class="code-keyword">step</span> <span class="code-number">${tileSize}</span>:`;
         if (iter && iter[varName] !== undefined) {
             html += ` <span class="code-comment">← ${varName}=${iter[varName]}</span>`;
@@ -830,14 +896,14 @@ function generateTiledCodeHTML(order, tileSize) {
     }
 
     // Inner element loops
-    for (let level = 0; level < 3; level++) {
+    for (let level = 0; level < numLoops; level++) {
         const varName = order[level];
         const tileVar = 't' + varName;
-        const isInnermost = level === 2;
+        const isInnermost = level === numLoops - 1;
         const isCurrent = isInnermost && state.currentIteration < state.iterations.length;
 
         html += `<div class="code-line${isCurrent ? ' current' : ''}">`;
-        html += `${indent[level + 3]}<span class="code-keyword">for</span> `;
+        html += `${indent[level + numLoops]}<span class="code-keyword">for</span> `;
         html += `<span class="code-var">${varName}</span> `;
         html += `<span class="code-keyword">in</span> `;
         html += `<span class="code-var">${tileVar}</span>..<span class="code-var">${tileVar}</span>+<span class="code-number">${tileSize}</span>:`;
@@ -847,7 +913,7 @@ function generateTiledCodeHTML(order, tileSize) {
         html += '</div>';
     }
 
-    html += `<div class="code-line">${indent[6]}C[i][j] += A[i][k] * B[k][j]</div>`;
+    html += `<div class="code-line">${indent[2 * numLoops]}${operation.codeTemplate}</div>`;
     return html;
 }
 
@@ -921,11 +987,13 @@ function setupEventHandlers() {
 // =============================================================================
 
 function init() {
-    console.log('Matrix Tiling & Cache Visualizer initialized');
+    console.log('Cache Visualizer initialized');
+    console.log(`Operation: ${operation.displayName}`);
+    console.log(`Tensors: ${operation.tensors.map(t => t.name).join(', ')}`);
+
     initCanvases();
     setupEventHandlers();
     applyConfiguration();
 }
 
-// Start when DOM is ready
 document.addEventListener('DOMContentLoaded', init);
