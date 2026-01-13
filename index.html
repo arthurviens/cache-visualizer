@@ -1,0 +1,1745 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Matrix Tiling and Cache Behavior Visualizer</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        h1 {
+            text-align: center;
+            margin-bottom: 20px;
+            font-size: 1.5rem;
+            color: #fff;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        /* Configuration Panel */
+        .config-panel {
+            background: #252540;
+            border-radius: 8px;
+            padding: 15px 20px;
+            margin-bottom: 20px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+            align-items: flex-end;
+        }
+
+        .config-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        .config-group label {
+            font-size: 0.75rem;
+            color: #aaa;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .config-group select,
+        .config-group input {
+            background: #1a1a2e;
+            border: 1px solid #444;
+            color: #fff;
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-size: 0.9rem;
+        }
+
+        .config-group select:focus,
+        .config-group input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .config-group input[type="number"] {
+            width: 100px;
+        }
+
+        .layout-group {
+            display: flex;
+            gap: 10px;
+        }
+
+        .layout-item {
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+        }
+
+        .layout-item span {
+            font-size: 0.7rem;
+            color: #888;
+        }
+
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .checkbox-group input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+        }
+
+        .btn {
+            background: #667eea;
+            color: #fff;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: background 0.2s;
+        }
+
+        .btn:hover {
+            background: #5a6fd6;
+        }
+
+        .btn:disabled {
+            background: #444;
+            cursor: not-allowed;
+        }
+
+        /* Main Visualization Area */
+        .main-area {
+            display: grid;
+            grid-template-columns: 1fr 300px;
+            gap: 20px;
+        }
+
+        .visualization-section {
+            background: #252540;
+            border-radius: 8px;
+            padding: 20px;
+        }
+
+        /* Matrix Display */
+        .matrices-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .matrix-wrapper {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .matrix-header {
+            display: flex;
+            justify-content: space-between;
+            width: 100%;
+            margin-bottom: 8px;
+            font-size: 0.8rem;
+        }
+
+        .matrix-name {
+            font-weight: bold;
+            font-size: 1rem;
+        }
+
+        .matrix-stats {
+            color: #888;
+            font-family: monospace;
+        }
+
+        .matrix-canvas {
+            border: 1px solid #444;
+            background: #fff;
+        }
+
+        .operator {
+            font-size: 1.5rem;
+            color: #888;
+            padding: 0 10px;
+        }
+
+        /* Statistics Display */
+        .stats-bar {
+            display: flex;
+            justify-content: center;
+            gap: 30px;
+            padding: 15px;
+            background: #1a1a2e;
+            border-radius: 4px;
+            margin-bottom: 20px;
+            font-family: monospace;
+        }
+
+        .stat-item {
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 1.2rem;
+            font-weight: bold;
+            color: #667eea;
+        }
+
+        .stat-label {
+            font-size: 0.75rem;
+            color: #888;
+        }
+
+        /* Timeline */
+        .timeline-section {
+            margin-top: 20px;
+        }
+
+        .timeline-label {
+            font-size: 0.75rem;
+            color: #888;
+            margin-bottom: 5px;
+        }
+
+        .timeline-canvas {
+            width: 100%;
+            height: 60px;
+            background: #1a1a2e;
+            border-radius: 4px;
+        }
+
+        /* Playback Controls */
+        .playback-controls {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 15px;
+            padding: 15px;
+            background: #1a1a2e;
+            border-radius: 4px;
+            margin-top: 20px;
+        }
+
+        .playback-btn {
+            background: #333;
+            border: 1px solid #555;
+            color: #fff;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1rem;
+            transition: all 0.2s;
+        }
+
+        .playback-btn:hover {
+            background: #444;
+            border-color: #667eea;
+        }
+
+        .playback-btn.play-btn {
+            width: 50px;
+            height: 50px;
+            background: #667eea;
+            border-color: #667eea;
+        }
+
+        .playback-btn.play-btn:hover {
+            background: #5a6fd6;
+        }
+
+        .speed-control {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .speed-control label {
+            font-size: 0.8rem;
+            color: #888;
+        }
+
+        .speed-control input[type="range"] {
+            width: 100px;
+        }
+
+        .iteration-jump {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .iteration-jump input {
+            width: 80px;
+            background: #333;
+            border: 1px solid #555;
+            color: #fff;
+            padding: 5px 10px;
+            border-radius: 4px;
+            text-align: center;
+        }
+
+        .iteration-display {
+            font-family: monospace;
+            color: #888;
+            font-size: 0.9rem;
+        }
+
+        /* Side Panel */
+        .side-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .panel-section {
+            background: #252540;
+            border-radius: 8px;
+            padding: 15px;
+        }
+
+        .panel-title {
+            font-size: 0.85rem;
+            color: #aaa;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 10px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #333;
+        }
+
+        /* Code Display */
+        .code-display {
+            font-family: 'Fira Code', 'Consolas', monospace;
+            font-size: 0.8rem;
+            line-height: 1.6;
+            background: #1a1a2e;
+            padding: 12px;
+            border-radius: 4px;
+            overflow-x: auto;
+        }
+
+        .code-line {
+            white-space: pre;
+        }
+
+        .code-line.current {
+            background: rgba(102, 126, 234, 0.3);
+            margin: 0 -12px;
+            padding: 0 12px;
+        }
+
+        .code-keyword {
+            color: #c678dd;
+        }
+
+        .code-var {
+            color: #e06c75;
+        }
+
+        .code-number {
+            color: #d19a66;
+        }
+
+        .code-comment {
+            color: #5c6370;
+        }
+
+        /* Current State */
+        .state-grid {
+            display: grid;
+            grid-template-columns: auto 1fr;
+            gap: 8px 15px;
+            font-size: 0.85rem;
+        }
+
+        .state-label {
+            color: #888;
+        }
+
+        .state-value {
+            font-family: monospace;
+            color: #98c379;
+        }
+
+        /* Per-matrix stats */
+        .matrix-stats-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            margin-top: 10px;
+        }
+
+        .matrix-stat-card {
+            background: #1a1a2e;
+            padding: 10px;
+            border-radius: 4px;
+            text-align: center;
+        }
+
+        .matrix-stat-card .name {
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+
+        .matrix-stat-card .value {
+            font-family: monospace;
+            font-size: 0.8rem;
+            color: #888;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Matrix Multiplication: Tiling & Cache Visualization</h1>
+
+        <!-- Configuration Panel -->
+        <div class="config-panel">
+            <div class="config-group">
+                <label>Loop Order</label>
+                <select id="loopOrder">
+                    <option value="ijk">ijk (i → j → k)</option>
+                    <option value="ikj">ikj (i → k → j)</option>
+                    <option value="jik">jik (j → i → k)</option>
+                    <option value="jki">jki (j → k → i)</option>
+                    <option value="kij">kij (k → i → j)</option>
+                    <option value="kji">kji (k → j → i)</option>
+                </select>
+            </div>
+
+            <div class="config-group">
+                <label>Tiling</label>
+                <div class="checkbox-group">
+                    <input type="checkbox" id="tilingEnabled">
+                    <span>Enable Tiling</span>
+                </div>
+            </div>
+
+            <div class="config-group">
+                <label>Tile Size</label>
+                <select id="tileSize" disabled>
+                    <option value="2">2×2</option>
+                    <option value="4" selected>4×4</option>
+                    <option value="6">6×6</option>
+                </select>
+            </div>
+
+            <div class="config-group">
+                <label>Data Layout</label>
+                <div class="layout-group">
+                    <div class="layout-item">
+                        <span>Matrix A</span>
+                        <select id="layoutA">
+                            <option value="row">Row-major</option>
+                            <option value="col">Col-major</option>
+                        </select>
+                    </div>
+                    <div class="layout-item">
+                        <span>Matrix B</span>
+                        <select id="layoutB">
+                            <option value="row">Row-major</option>
+                            <option value="col">Col-major</option>
+                        </select>
+                    </div>
+                    <div class="layout-item">
+                        <span>Matrix C</span>
+                        <select id="layoutC">
+                            <option value="row">Row-major</option>
+                            <option value="col">Col-major</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <div class="config-group">
+                <label>Cache Size (bytes)</label>
+                <input type="number" id="cacheSize" value="256" min="64" step="64">
+            </div>
+
+            <button class="btn" id="applyConfig">Apply & Reset</button>
+        </div>
+
+        <!-- Main Area -->
+        <div class="main-area">
+            <!-- Visualization Section -->
+            <div class="visualization-section">
+                <!-- Matrix Display -->
+                <div class="matrices-container">
+                    <div class="matrix-wrapper">
+                        <div class="matrix-header">
+                            <span class="matrix-name">A</span>
+                            <span class="matrix-stats" id="statsA">mem:0 hit:0</span>
+                        </div>
+                        <canvas id="matrixA" class="matrix-canvas" width="240" height="240"></canvas>
+                    </div>
+
+                    <span class="operator">×</span>
+
+                    <div class="matrix-wrapper">
+                        <div class="matrix-header">
+                            <span class="matrix-name">B</span>
+                            <span class="matrix-stats" id="statsB">mem:0 hit:0</span>
+                        </div>
+                        <canvas id="matrixB" class="matrix-canvas" width="240" height="240"></canvas>
+                    </div>
+
+                    <span class="operator">=</span>
+
+                    <div class="matrix-wrapper">
+                        <div class="matrix-header">
+                            <span class="matrix-name">C</span>
+                            <span class="matrix-stats" id="statsC">mem:0 hit:0</span>
+                        </div>
+                        <canvas id="matrixC" class="matrix-canvas" width="240" height="240"></canvas>
+                    </div>
+                </div>
+
+                <!-- Overall Stats -->
+                <div class="stats-bar">
+                    <div class="stat-item">
+                        <div class="stat-value" id="totalMem">0</div>
+                        <div class="stat-label">Total Memory Accesses</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="totalHits">0</div>
+                        <div class="stat-label">Cache Hits</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="hitRate">0%</div>
+                        <div class="stat-label">Hit Rate</div>
+                    </div>
+                </div>
+
+                <!-- Timeline -->
+                <div class="timeline-section">
+                    <div class="timeline-label">Cache Hit Timeline (A | B | C)</div>
+                    <canvas id="timeline" class="timeline-canvas"></canvas>
+                </div>
+
+                <!-- Playback Controls -->
+                <div class="playback-controls">
+                    <button class="playback-btn" id="resetBtn" title="Reset">⏮</button>
+                    <button class="playback-btn" id="stepBackBtn" title="Step Back">⏪</button>
+                    <button class="playback-btn play-btn" id="playPauseBtn" title="Play/Pause">▶</button>
+                    <button class="playback-btn" id="stepFwdBtn" title="Step Forward">⏩</button>
+
+                    <div class="speed-control">
+                        <label>Speed:</label>
+                        <input type="range" id="speedSlider" min="0" max="100" value="50">
+                        <span id="speedDisplay">10x</span>
+                    </div>
+
+                    <div class="iteration-jump">
+                        <label>Jump to:</label>
+                        <input type="number" id="jumpIteration" min="0" max="1727" value="0">
+                        <span class="iteration-display">/ <span id="totalIterations">1728</span></span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Side Panel -->
+            <div class="side-panel">
+                <!-- Code Display -->
+                <div class="panel-section">
+                    <div class="panel-title">Loop Structure</div>
+                    <div class="code-display" id="codeDisplay">
+                        <!-- Code will be generated here -->
+                    </div>
+                </div>
+
+                <!-- Current State -->
+                <div class="panel-section">
+                    <div class="panel-title">Current State</div>
+                    <div class="state-grid">
+                        <span class="state-label">Iteration:</span>
+                        <span class="state-value" id="currentIteration">0 of 1728</span>
+
+                        <span class="state-label">Indices:</span>
+                        <span class="state-value" id="currentIndices">i=0, j=0, k=0</span>
+
+                        <span class="state-label">Operation:</span>
+                        <span class="state-value" id="currentOp">-</span>
+                    </div>
+                </div>
+
+                <!-- Per-Matrix Stats -->
+                <div class="panel-section">
+                    <div class="panel-title">Per-Matrix Statistics</div>
+                    <div class="matrix-stats-grid">
+                        <div class="matrix-stat-card">
+                            <div class="name">A</div>
+                            <div class="value" id="detailStatsA">0/0 hits</div>
+                        </div>
+                        <div class="matrix-stat-card">
+                            <div class="name">B</div>
+                            <div class="value" id="detailStatsB">0/0 hits</div>
+                        </div>
+                        <div class="matrix-stat-card">
+                            <div class="name">C</div>
+                            <div class="value" id="detailStatsC">0/0 hits</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ============================================
+        // CONFIGURATION & CONSTANTS
+        // ============================================
+        const MATRIX_SIZE = 12;
+        const ELEMENT_SIZE = 4; // bytes
+        const CACHE_LINE_SIZE = 64; // bytes
+        const TOTAL_ITERATIONS = MATRIX_SIZE * MATRIX_SIZE * MATRIX_SIZE; // 1728
+
+        // Base addresses for matrices in simulated memory
+        const BASE_A = 0;
+        const BASE_B = MATRIX_SIZE * MATRIX_SIZE * ELEMENT_SIZE; // 576
+        const BASE_C = 2 * MATRIX_SIZE * MATRIX_SIZE * ELEMENT_SIZE; // 1152
+
+        // ============================================
+        // APPLICATION STATE
+        // ============================================
+        const state = {
+            // Configuration
+            loopOrder: 'ijk',
+            tilingEnabled: false,
+            tileSize: 4,
+            layoutA: 'row',
+            layoutB: 'row',
+            layoutC: 'row',
+            cacheSize: 256,
+
+            // Simulation state
+            currentIteration: 0,
+            isPlaying: false,
+            speed: 10, // iterations per second
+
+            // Generated iteration sequence
+            iterations: [],
+
+            // Cache state
+            cache: null,
+
+            // Statistics
+            stats: {
+                A: { accesses: 0, hits: 0 },
+                B: { accesses: 0, hits: 0 },
+                C: { accesses: 0, hits: 0 }
+            },
+
+            // History for timeline
+            history: [] // Array of { A: hit/miss, B: hit/miss, C: hit/miss }
+        };
+
+        // ============================================
+        // ITERATION GENERATOR
+        // ============================================
+
+        /**
+         * Generates the sequence of (i, j, k) tuples for matrix multiplication
+         * based on the selected loop order.
+         *
+         * Each tuple represents one computation: C[i][j] += A[i][k] * B[k][j]
+         *
+         * @param {string} loopOrder - One of: 'ijk', 'ikj', 'jik', 'jki', 'kij', 'kji'
+         * @param {number} size - Matrix dimension (12 for our case)
+         * @returns {Array<{i: number, j: number, k: number}>} - Sequence of index tuples
+         */
+        function generateIterations(loopOrder, size) {
+            const iterations = [];
+
+            // Define loop variable mappings for each order
+            // Format: [outer, middle, inner] where each is 'i', 'j', or 'k'
+            const loopOrders = {
+                'ijk': ['i', 'j', 'k'],
+                'ikj': ['i', 'k', 'j'],
+                'jik': ['j', 'i', 'k'],
+                'jki': ['j', 'k', 'i'],
+                'kij': ['k', 'i', 'j'],
+                'kji': ['k', 'j', 'i']
+            };
+
+            const order = loopOrders[loopOrder];
+            if (!order) {
+                throw new Error(`Unknown loop order: ${loopOrder}`);
+            }
+
+            // Generate iterations in the specified order
+            for (let outer = 0; outer < size; outer++) {
+                for (let middle = 0; middle < size; middle++) {
+                    for (let inner = 0; inner < size; inner++) {
+                        // Map loop variables to i, j, k based on order
+                        const indices = {};
+                        indices[order[0]] = outer;
+                        indices[order[1]] = middle;
+                        indices[order[2]] = inner;
+
+                        iterations.push({
+                            i: indices.i,
+                            j: indices.j,
+                            k: indices.k
+                        });
+                    }
+                }
+            }
+
+            return iterations;
+        }
+
+        /**
+         * Returns the loop order array for display purposes
+         * @param {string} loopOrder - The loop order string
+         * @returns {Array<string>} - Array of variable names in nesting order
+         */
+        function getLoopOrderArray(loopOrder) {
+            const orders = {
+                'ijk': ['i', 'j', 'k'],
+                'ikj': ['i', 'k', 'j'],
+                'jik': ['j', 'i', 'k'],
+                'jki': ['j', 'k', 'i'],
+                'kij': ['k', 'i', 'j'],
+                'kji': ['k', 'j', 'i']
+            };
+            return orders[loopOrder] || ['i', 'j', 'k'];
+        }
+
+        /**
+         * Generates the sequence of (i, j, k) tuples for TILED matrix multiplication.
+         *
+         * Tiled iteration has 6 nested loops:
+         * - 3 outer tile loops (ti, tj, tk) iterating over tiles
+         * - 3 inner loops (i, j, k) iterating within each tile
+         *
+         * The loop order determines the nesting order at both tile and element level.
+         *
+         * @param {string} loopOrder - One of: 'ijk', 'ikj', 'jik', 'jki', 'kij', 'kji'
+         * @param {number} size - Matrix dimension (12)
+         * @param {number} tileSize - Tile dimension (2, 4, or 6)
+         * @returns {Array<{i, j, k, ti, tj, tk}>} - Sequence with both element and tile indices
+         */
+        function generateTiledIterations(loopOrder, size, tileSize) {
+            const iterations = [];
+
+            // The order applies to both tile loops and inner loops
+            const orderMap = {
+                'ijk': ['i', 'j', 'k'],
+                'ikj': ['i', 'k', 'j'],
+                'jik': ['j', 'i', 'k'],
+                'jki': ['j', 'k', 'i'],
+                'kij': ['k', 'i', 'j'],
+                'kji': ['k', 'j', 'i']
+            };
+
+            const order = orderMap[loopOrder];
+            if (!order) {
+                throw new Error(`Unknown loop order: ${loopOrder}`);
+            }
+
+            const numTiles = size / tileSize;
+
+            // Outer tile loops (following the same order)
+            for (let tOuter = 0; tOuter < numTiles; tOuter++) {
+                for (let tMiddle = 0; tMiddle < numTiles; tMiddle++) {
+                    for (let tInner = 0; tInner < numTiles; tInner++) {
+                        // Map tile loop variables
+                        const tileIndices = {};
+                        tileIndices['t' + order[0]] = tOuter * tileSize;
+                        tileIndices['t' + order[1]] = tMiddle * tileSize;
+                        tileIndices['t' + order[2]] = tInner * tileSize;
+
+                        const ti = tileIndices.ti;
+                        const tj = tileIndices.tj;
+                        const tk = tileIndices.tk;
+
+                        // Inner element loops within the tile (same order)
+                        for (let eOuter = 0; eOuter < tileSize; eOuter++) {
+                            for (let eMiddle = 0; eMiddle < tileSize; eMiddle++) {
+                                for (let eInner = 0; eInner < tileSize; eInner++) {
+                                    // Map element loop variables
+                                    const elemIndices = {};
+                                    elemIndices[order[0]] = eOuter;
+                                    elemIndices[order[1]] = eMiddle;
+                                    elemIndices[order[2]] = eInner;
+
+                                    // Compute absolute indices
+                                    iterations.push({
+                                        i: ti + elemIndices.i,
+                                        j: tj + elemIndices.j,
+                                        k: tk + elemIndices.k,
+                                        // Store tile base for visualization
+                                        ti: ti,
+                                        tj: tj,
+                                        tk: tk,
+                                        // Store local indices for code display
+                                        li: elemIndices.i,
+                                        lj: elemIndices.j,
+                                        lk: elemIndices.k
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            return iterations;
+        }
+
+        /**
+         * Main function to generate iterations based on current configuration
+         */
+        function generateAllIterations() {
+            if (state.tilingEnabled) {
+                return generateTiledIterations(state.loopOrder, MATRIX_SIZE, state.tileSize);
+            } else {
+                return generateIterations(state.loopOrder, MATRIX_SIZE);
+            }
+        }
+
+        // ============================================
+        // CACHE MODEL
+        // ============================================
+
+        /**
+         * LRU Cache Simulator
+         *
+         * Models a simple cache with:
+         * - Configurable capacity (in bytes)
+         * - Fixed cache line size (64 bytes)
+         * - LRU eviction policy
+         *
+         * The cache stores cache lines (not individual elements).
+         * When an address is accessed, the entire cache line is loaded.
+         */
+        class CacheSimulator {
+            constructor(capacityBytes, lineSize = CACHE_LINE_SIZE) {
+                this.capacityBytes = capacityBytes;
+                this.lineSize = lineSize;
+                this.maxLines = Math.floor(capacityBytes / lineSize);
+
+                // LRU cache: Map from cache line address to access order
+                // We use an array to maintain LRU order (front = oldest, back = newest)
+                this.lines = []; // Array of cache line base addresses
+
+                // Statistics
+                this.totalAccesses = 0;
+                this.hits = 0;
+                this.misses = 0;
+            }
+
+            /**
+             * Get the cache line base address for a given memory address
+             */
+            getLineAddress(address) {
+                return Math.floor(address / this.lineSize) * this.lineSize;
+            }
+
+            /**
+             * Access a memory address. Returns true for hit, false for miss.
+             * @param {number} address - The memory address to access
+             * @returns {boolean} - true if cache hit, false if miss
+             */
+            access(address) {
+                this.totalAccesses++;
+                const lineAddr = this.getLineAddress(address);
+
+                // Check if line is in cache
+                const index = this.lines.indexOf(lineAddr);
+
+                if (index !== -1) {
+                    // Cache hit - move to end (most recently used)
+                    this.lines.splice(index, 1);
+                    this.lines.push(lineAddr);
+                    this.hits++;
+                    return true;
+                } else {
+                    // Cache miss
+                    this.misses++;
+
+                    // Evict oldest line if cache is full
+                    if (this.lines.length >= this.maxLines) {
+                        this.lines.shift(); // Remove LRU (oldest)
+                    }
+
+                    // Add new line as most recently used
+                    this.lines.push(lineAddr);
+                    return false;
+                }
+            }
+
+            /**
+             * Check if an address is currently in cache (without affecting LRU state)
+             */
+            isInCache(address) {
+                const lineAddr = this.getLineAddress(address);
+                return this.lines.includes(lineAddr);
+            }
+
+            /**
+             * Get all memory addresses currently in cache
+             * Returns an array of {start, end} ranges for each cache line
+             */
+            getCachedRanges() {
+                return this.lines.map(lineAddr => ({
+                    start: lineAddr,
+                    end: lineAddr + this.lineSize - 1
+                }));
+            }
+
+            /**
+             * Check if a specific element (by address) is in cache
+             */
+            isAddressCached(address) {
+                const lineAddr = this.getLineAddress(address);
+                return this.lines.includes(lineAddr);
+            }
+
+            /**
+             * Reset the cache to empty state
+             */
+            reset() {
+                this.lines = [];
+                this.totalAccesses = 0;
+                this.hits = 0;
+                this.misses = 0;
+            }
+
+            /**
+             * Get current statistics
+             */
+            getStats() {
+                return {
+                    accesses: this.totalAccesses,
+                    hits: this.hits,
+                    misses: this.misses,
+                    hitRate: this.totalAccesses > 0
+                        ? (this.hits / this.totalAccesses * 100).toFixed(1)
+                        : 0
+                };
+            }
+
+            /**
+             * Create a snapshot of current cache state (for stepping backward)
+             */
+            snapshot() {
+                return {
+                    lines: [...this.lines],
+                    totalAccesses: this.totalAccesses,
+                    hits: this.hits,
+                    misses: this.misses
+                };
+            }
+
+            /**
+             * Restore from a snapshot
+             */
+            restore(snapshot) {
+                this.lines = [...snapshot.lines];
+                this.totalAccesses = snapshot.totalAccesses;
+                this.hits = snapshot.hits;
+                this.misses = snapshot.misses;
+            }
+        }
+
+        // ============================================
+        // MEMORY ADDRESS CALCULATION
+        // ============================================
+
+        /**
+         * Calculate memory address for a matrix element based on layout.
+         *
+         * @param {number} row - Row index (i)
+         * @param {number} col - Column index (j)
+         * @param {number} baseAddress - Base address of the matrix
+         * @param {string} layout - 'row' for row-major, 'col' for column-major
+         * @returns {number} - Memory address in bytes
+         */
+        function getAddress(row, col, baseAddress, layout) {
+            if (layout === 'col') {
+                // Column-major: elements in same column are contiguous (row varies fastest)
+                return baseAddress + (col * MATRIX_SIZE + row) * ELEMENT_SIZE;
+            } else {
+                // Row-major (default): elements in same row are contiguous (column varies fastest)
+                return baseAddress + (row * MATRIX_SIZE + col) * ELEMENT_SIZE;
+            }
+        }
+
+        /**
+         * Get memory address for matrix A element A[i][k]
+         */
+        function getAddressA(i, k) {
+            return getAddress(i, k, BASE_A, state.layoutA);
+        }
+
+        /**
+         * Get memory address for matrix B element B[k][j]
+         */
+        function getAddressB(k, j) {
+            return getAddress(k, j, BASE_B, state.layoutB);
+        }
+
+        /**
+         * Get memory address for matrix C element C[i][j]
+         */
+        function getAddressC(i, j) {
+            return getAddress(i, j, BASE_C, state.layoutC);
+        }
+
+        /**
+         * Check if a matrix element is in cache
+         * @param {string} matrix - 'A', 'B', or 'C'
+         * @param {number} row - Row index
+         * @param {number} col - Column index
+         * @returns {boolean}
+         */
+        function isElementInCache(matrix, row, col) {
+            if (!state.cache) return false;
+
+            let address;
+            switch (matrix) {
+                case 'A':
+                    address = getAddress(row, col, BASE_A, state.layoutA);
+                    break;
+                case 'B':
+                    address = getAddress(row, col, BASE_B, state.layoutB);
+                    break;
+                case 'C':
+                    address = getAddress(row, col, BASE_C, state.layoutC);
+                    break;
+                default:
+                    return false;
+            }
+
+            return state.cache.isAddressCached(address);
+        }
+
+        // ============================================
+        // RENDERING
+        // ============================================
+
+        // Canvas contexts
+        let ctxA, ctxB, ctxC, ctxTimeline;
+
+        // Constants for rendering
+        const CELL_SIZE = 20; // 240px / 12 = 20px per cell
+        const COLORS = {
+            background: '#ffffff',
+            grid: '#cccccc',
+            tileGrid: '#666666',
+            cached: 'rgba(220, 53, 69, 0.6)',      // Red for cached
+            cachedLight: 'rgba(220, 53, 69, 0.3)', // Light red for cache line
+            current: '#000000',                     // Black for current access
+            currentOutline: '#667eea'               // Purple outline for current
+        };
+
+        /**
+         * Initialize canvas contexts
+         */
+        function initCanvases() {
+            ctxA = document.getElementById('matrixA').getContext('2d');
+            ctxB = document.getElementById('matrixB').getContext('2d');
+            ctxC = document.getElementById('matrixC').getContext('2d');
+            ctxTimeline = document.getElementById('timeline').getContext('2d');
+
+            // Set timeline canvas size based on container
+            const timelineCanvas = document.getElementById('timeline');
+            timelineCanvas.width = timelineCanvas.offsetWidth;
+            timelineCanvas.height = 60;
+        }
+
+        /**
+         * Render a single matrix grid
+         *
+         * @param {CanvasRenderingContext2D} ctx - Canvas context
+         * @param {string} matrixName - 'A', 'B', or 'C'
+         * @param {number|null} currentRow - Row of current access (or null)
+         * @param {number|null} currentCol - Column of current access (or null)
+         */
+        function renderMatrix(ctx, matrixName, currentRow, currentCol) {
+            const canvas = ctx.canvas;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Fill background
+            ctx.fillStyle = COLORS.background;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Draw cached elements
+            if (state.cache) {
+                for (let row = 0; row < MATRIX_SIZE; row++) {
+                    for (let col = 0; col < MATRIX_SIZE; col++) {
+                        if (isElementInCache(matrixName, row, col)) {
+                            ctx.fillStyle = COLORS.cached;
+                            ctx.fillRect(
+                                col * CELL_SIZE,
+                                row * CELL_SIZE,
+                                CELL_SIZE,
+                                CELL_SIZE
+                            );
+                        }
+                    }
+                }
+            }
+
+            // Draw grid lines
+            ctx.strokeStyle = COLORS.grid;
+            ctx.lineWidth = 1;
+
+            for (let i = 0; i <= MATRIX_SIZE; i++) {
+                // Vertical lines
+                ctx.beginPath();
+                ctx.moveTo(i * CELL_SIZE, 0);
+                ctx.lineTo(i * CELL_SIZE, canvas.height);
+                ctx.stroke();
+
+                // Horizontal lines
+                ctx.beginPath();
+                ctx.moveTo(0, i * CELL_SIZE);
+                ctx.lineTo(canvas.width, i * CELL_SIZE);
+                ctx.stroke();
+            }
+
+            // Draw tile boundaries if tiling is enabled
+            if (state.tilingEnabled && state.tileSize > 1) {
+                ctx.strokeStyle = COLORS.tileGrid;
+                ctx.lineWidth = 2;
+
+                for (let i = 0; i <= MATRIX_SIZE; i += state.tileSize) {
+                    // Vertical tile lines
+                    ctx.beginPath();
+                    ctx.moveTo(i * CELL_SIZE, 0);
+                    ctx.lineTo(i * CELL_SIZE, canvas.height);
+                    ctx.stroke();
+
+                    // Horizontal tile lines
+                    ctx.beginPath();
+                    ctx.moveTo(0, i * CELL_SIZE);
+                    ctx.lineTo(canvas.width, i * CELL_SIZE);
+                    ctx.stroke();
+                }
+            }
+
+            // Draw current access indicator
+            if (currentRow !== null && currentCol !== null) {
+                const x = currentCol * CELL_SIZE + CELL_SIZE / 2;
+                const y = currentRow * CELL_SIZE + CELL_SIZE / 2;
+
+                // Draw filled black square
+                ctx.fillStyle = COLORS.current;
+                ctx.fillRect(
+                    currentCol * CELL_SIZE + 3,
+                    currentRow * CELL_SIZE + 3,
+                    CELL_SIZE - 6,
+                    CELL_SIZE - 6
+                );
+
+                // Draw outline
+                ctx.strokeStyle = COLORS.currentOutline;
+                ctx.lineWidth = 2;
+                ctx.strokeRect(
+                    currentCol * CELL_SIZE + 1,
+                    currentRow * CELL_SIZE + 1,
+                    CELL_SIZE - 2,
+                    CELL_SIZE - 2
+                );
+            }
+        }
+
+        /**
+         * Render all three matrices
+         */
+        function renderAllMatrices() {
+            const iter = state.iterations[state.currentIteration];
+
+            if (iter) {
+                // A[i][k], B[k][j], C[i][j]
+                renderMatrix(ctxA, 'A', iter.i, iter.k);
+                renderMatrix(ctxB, 'B', iter.k, iter.j);
+                renderMatrix(ctxC, 'C', iter.i, iter.j);
+            } else {
+                // No current iteration - render empty grids
+                renderMatrix(ctxA, 'A', null, null);
+                renderMatrix(ctxB, 'B', null, null);
+                renderMatrix(ctxC, 'C', null, null);
+            }
+        }
+
+        /**
+         * Render the cache hit timeline
+         */
+        function renderTimeline() {
+            const canvas = ctxTimeline.canvas;
+            const width = canvas.width;
+            const height = canvas.height;
+
+            // Clear
+            ctxTimeline.fillStyle = '#1a1a2e';
+            ctxTimeline.fillRect(0, 0, width, height);
+
+            if (state.history.length === 0) return;
+
+            // Calculate dimensions
+            const rowHeight = height / 3;
+            const barWidth = Math.max(1, width / TOTAL_ITERATIONS);
+
+            // Draw labels
+            ctxTimeline.fillStyle = '#666';
+            ctxTimeline.font = '10px monospace';
+            ctxTimeline.fillText('A', 2, rowHeight / 2 + 3);
+            ctxTimeline.fillText('B', 2, rowHeight + rowHeight / 2 + 3);
+            ctxTimeline.fillText('C', 2, 2 * rowHeight + rowHeight / 2 + 3);
+
+            // Offset for labels
+            const labelOffset = 15;
+            const drawWidth = width - labelOffset;
+            const barWidthScaled = drawWidth / TOTAL_ITERATIONS;
+
+            // Draw history
+            for (let i = 0; i < state.history.length; i++) {
+                const x = labelOffset + i * barWidthScaled;
+                const h = state.history[i];
+
+                // Matrix A
+                ctxTimeline.fillStyle = h.A ? '#dc3545' : '#333';
+                ctxTimeline.fillRect(x, 2, Math.max(1, barWidthScaled - 0.5), rowHeight - 4);
+
+                // Matrix B
+                ctxTimeline.fillStyle = h.B ? '#dc3545' : '#333';
+                ctxTimeline.fillRect(x, rowHeight + 2, Math.max(1, barWidthScaled - 0.5), rowHeight - 4);
+
+                // Matrix C
+                ctxTimeline.fillStyle = h.C ? '#dc3545' : '#333';
+                ctxTimeline.fillRect(x, 2 * rowHeight + 2, Math.max(1, barWidthScaled - 0.5), rowHeight - 4);
+            }
+
+            // Draw current position indicator
+            if (state.currentIteration > 0) {
+                const x = labelOffset + (state.currentIteration - 1) * barWidthScaled;
+                ctxTimeline.strokeStyle = '#667eea';
+                ctxTimeline.lineWidth = 2;
+                ctxTimeline.beginPath();
+                ctxTimeline.moveTo(x + barWidthScaled, 0);
+                ctxTimeline.lineTo(x + barWidthScaled, height);
+                ctxTimeline.stroke();
+            }
+        }
+
+        /**
+         * Update the statistics display
+         */
+        function updateStatsDisplay() {
+            // Per-matrix stats in header
+            document.getElementById('statsA').textContent =
+                `mem:${state.stats.A.accesses} hit:${state.stats.A.hits}`;
+            document.getElementById('statsB').textContent =
+                `mem:${state.stats.B.accesses} hit:${state.stats.B.hits}`;
+            document.getElementById('statsC').textContent =
+                `mem:${state.stats.C.accesses} hit:${state.stats.C.hits}`;
+
+            // Overall stats
+            const totalAccesses = state.stats.A.accesses + state.stats.B.accesses + state.stats.C.accesses;
+            const totalHits = state.stats.A.hits + state.stats.B.hits + state.stats.C.hits;
+            const hitRate = totalAccesses > 0 ? (totalHits / totalAccesses * 100).toFixed(0) : 0;
+
+            document.getElementById('totalMem').textContent = totalAccesses;
+            document.getElementById('totalHits').textContent = totalHits;
+            document.getElementById('hitRate').textContent = hitRate + '%';
+
+            // Detailed per-matrix stats
+            document.getElementById('detailStatsA').textContent =
+                `${state.stats.A.hits}/${state.stats.A.accesses} hits`;
+            document.getElementById('detailStatsB').textContent =
+                `${state.stats.B.hits}/${state.stats.B.accesses} hits`;
+            document.getElementById('detailStatsC').textContent =
+                `${state.stats.C.hits}/${state.stats.C.accesses} hits`;
+        }
+
+        /**
+         * Update current state display
+         */
+        function updateStateDisplay() {
+            const iter = state.iterations[state.currentIteration];
+
+            document.getElementById('currentIteration').textContent =
+                `${state.currentIteration} of ${TOTAL_ITERATIONS}`;
+
+            if (iter) {
+                if (state.tilingEnabled && iter.ti !== undefined) {
+                    document.getElementById('currentIndices').textContent =
+                        `ti=${iter.ti}, tj=${iter.tj}, tk=${iter.tk}, i=${iter.i}, j=${iter.j}, k=${iter.k}`;
+                } else {
+                    document.getElementById('currentIndices').textContent =
+                        `i=${iter.i}, j=${iter.j}, k=${iter.k}`;
+                }
+                document.getElementById('currentOp').textContent =
+                    `A[${iter.i}][${iter.k}] × B[${iter.k}][${iter.j}] → C[${iter.i}][${iter.j}]`;
+            } else {
+                document.getElementById('currentIndices').textContent = '-';
+                document.getElementById('currentOp').textContent = '-';
+            }
+
+            // Update jump input max
+            document.getElementById('jumpIteration').max = TOTAL_ITERATIONS - 1;
+            document.getElementById('totalIterations').textContent = TOTAL_ITERATIONS;
+        }
+
+        /**
+         * Full render of all visualization components
+         */
+        function render() {
+            renderAllMatrices();
+            renderTimeline();
+            updateStatsDisplay();
+            updateStateDisplay();
+        }
+
+        // ============================================
+        // SIMULATION LOGIC
+        // ============================================
+
+        // Animation state
+        let animationId = null;
+        let lastFrameTime = 0;
+
+        // Snapshot history for stepping backward
+        let snapshots = [];
+
+        /**
+         * Execute one simulation step (one iteration of the loop)
+         * @returns {object} - The hit/miss result for this iteration
+         */
+        function executeStep() {
+            if (state.currentIteration >= state.iterations.length) {
+                return null;
+            }
+
+            const iter = state.iterations[state.currentIteration];
+
+            // Access memory for A[i][k], B[k][j], C[i][j]
+            const addrA = getAddressA(iter.i, iter.k);
+            const addrB = getAddressB(iter.k, iter.j);
+            const addrC = getAddressC(iter.i, iter.j);
+
+            // Perform cache accesses and track hits/misses
+            const hitA = state.cache.access(addrA);
+            const hitB = state.cache.access(addrB);
+            const hitC = state.cache.access(addrC);
+
+            // Update per-matrix statistics
+            state.stats.A.accesses++;
+            state.stats.A.hits += hitA ? 1 : 0;
+
+            state.stats.B.accesses++;
+            state.stats.B.hits += hitB ? 1 : 0;
+
+            state.stats.C.accesses++;
+            state.stats.C.hits += hitC ? 1 : 0;
+
+            // Record history for timeline
+            const result = { A: hitA, B: hitB, C: hitC };
+            state.history.push(result);
+
+            state.currentIteration++;
+
+            return result;
+        }
+
+        /**
+         * Reset simulation to initial state
+         */
+        function resetSimulation() {
+            stopAnimation();
+
+            // Reset state
+            state.currentIteration = 0;
+            state.history = [];
+            snapshots = [];
+
+            // Reset statistics
+            state.stats = {
+                A: { accesses: 0, hits: 0 },
+                B: { accesses: 0, hits: 0 },
+                C: { accesses: 0, hits: 0 }
+            };
+
+            // Reset cache
+            if (state.cache) {
+                state.cache.reset();
+            }
+
+            // Update play button
+            document.getElementById('playPauseBtn').textContent = '▶';
+
+            render();
+            updateCodeDisplay();
+        }
+
+        /**
+         * Jump to a specific iteration (requires replaying from start)
+         */
+        function jumpToIteration(targetIteration) {
+            // Clamp to valid range
+            targetIteration = Math.max(0, Math.min(targetIteration, state.iterations.length));
+
+            // If going backward, we need to replay from start
+            if (targetIteration < state.currentIteration) {
+                resetSimulation();
+            }
+
+            // Execute steps until we reach target
+            while (state.currentIteration < targetIteration) {
+                executeStep();
+            }
+
+            render();
+            updateCodeDisplay();
+        }
+
+        /**
+         * Step forward one iteration
+         */
+        function stepForward() {
+            if (state.currentIteration < state.iterations.length) {
+                // Save snapshot for backward stepping
+                snapshots.push({
+                    cache: state.cache.snapshot(),
+                    stats: JSON.parse(JSON.stringify(state.stats)),
+                    historyLength: state.history.length,
+                    iteration: state.currentIteration
+                });
+
+                executeStep();
+                render();
+                updateCodeDisplay();
+            }
+        }
+
+        /**
+         * Step backward one iteration
+         */
+        function stepBackward() {
+            if (snapshots.length > 0) {
+                const snapshot = snapshots.pop();
+
+                // Restore state
+                state.cache.restore(snapshot.cache);
+                state.stats = snapshot.stats;
+                state.history = state.history.slice(0, snapshot.historyLength);
+                state.currentIteration = snapshot.iteration;
+
+                render();
+                updateCodeDisplay();
+            }
+        }
+
+        /**
+         * Animation loop
+         */
+        function animate(timestamp) {
+            if (!state.isPlaying) return;
+
+            const elapsed = timestamp - lastFrameTime;
+            const interval = 1000 / state.speed; // ms per iteration
+
+            if (elapsed >= interval) {
+                if (state.currentIteration < state.iterations.length) {
+                    // Clear old snapshots to save memory (keep only last 100)
+                    if (snapshots.length > 100) {
+                        snapshots = snapshots.slice(-50);
+                    }
+
+                    snapshots.push({
+                        cache: state.cache.snapshot(),
+                        stats: JSON.parse(JSON.stringify(state.stats)),
+                        historyLength: state.history.length,
+                        iteration: state.currentIteration
+                    });
+
+                    executeStep();
+                    render();
+                    updateCodeDisplay();
+
+                    lastFrameTime = timestamp;
+                } else {
+                    // Reached end
+                    stopAnimation();
+                }
+            }
+
+            if (state.isPlaying) {
+                animationId = requestAnimationFrame(animate);
+            }
+        }
+
+        /**
+         * Start animation
+         */
+        function startAnimation() {
+            if (!state.isPlaying && state.currentIteration < state.iterations.length) {
+                state.isPlaying = true;
+                document.getElementById('playPauseBtn').textContent = '⏸';
+                lastFrameTime = performance.now();
+                animationId = requestAnimationFrame(animate);
+            }
+        }
+
+        /**
+         * Stop animation
+         */
+        function stopAnimation() {
+            state.isPlaying = false;
+            document.getElementById('playPauseBtn').textContent = '▶';
+            if (animationId) {
+                cancelAnimationFrame(animationId);
+                animationId = null;
+            }
+        }
+
+        /**
+         * Toggle play/pause
+         */
+        function togglePlayPause() {
+            if (state.isPlaying) {
+                stopAnimation();
+            } else {
+                startAnimation();
+            }
+        }
+
+        /**
+         * Apply configuration from UI
+         */
+        function applyConfiguration() {
+            // Read values from UI
+            state.loopOrder = document.getElementById('loopOrder').value;
+            state.tilingEnabled = document.getElementById('tilingEnabled').checked;
+            state.tileSize = parseInt(document.getElementById('tileSize').value);
+            state.layoutA = document.getElementById('layoutA').value;
+            state.layoutB = document.getElementById('layoutB').value;
+            state.layoutC = document.getElementById('layoutC').value;
+            state.cacheSize = parseInt(document.getElementById('cacheSize').value) || 256;
+
+            // Regenerate iterations
+            state.iterations = generateAllIterations();
+
+            // Create new cache
+            state.cache = new CacheSimulator(state.cacheSize);
+
+            // Reset simulation
+            resetSimulation();
+        }
+
+        // ============================================
+        // UI EVENT HANDLERS
+        // ============================================
+
+        // Enable/disable tile size based on tiling checkbox
+        document.getElementById('tilingEnabled').addEventListener('change', (e) => {
+            document.getElementById('tileSize').disabled = !e.target.checked;
+        });
+
+        // Apply configuration
+        document.getElementById('applyConfig').addEventListener('click', applyConfiguration);
+
+        // Playback controls
+        document.getElementById('playPauseBtn').addEventListener('click', togglePlayPause);
+        document.getElementById('stepFwdBtn').addEventListener('click', stepForward);
+        document.getElementById('stepBackBtn').addEventListener('click', stepBackward);
+        document.getElementById('resetBtn').addEventListener('click', resetSimulation);
+
+        // Speed slider
+        document.getElementById('speedSlider').addEventListener('input', (e) => {
+            // Logarithmic scale: 1x to 100x
+            const value = e.target.value;
+            const speed = Math.round(Math.pow(10, value / 50));
+            state.speed = speed;
+            document.getElementById('speedDisplay').textContent = speed + 'x';
+        });
+
+        // Jump to iteration
+        document.getElementById('jumpIteration').addEventListener('change', (e) => {
+            const target = Math.min(Math.max(0, parseInt(e.target.value) || 0), TOTAL_ITERATIONS - 1);
+            jumpToIteration(target);
+            e.target.value = state.currentIteration;
+        });
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+
+            switch (e.code) {
+                case 'Space':
+                    e.preventDefault();
+                    togglePlayPause();
+                    break;
+                case 'ArrowRight':
+                    e.preventDefault();
+                    stepForward();
+                    break;
+                case 'ArrowLeft':
+                    e.preventDefault();
+                    stepBackward();
+                    break;
+                case 'KeyR':
+                    e.preventDefault();
+                    resetSimulation();
+                    break;
+            }
+        });
+
+        // ============================================
+        // CODE DISPLAY
+        // ============================================
+
+        /**
+         * Generate and display the loop code based on current configuration
+         */
+        function updateCodeDisplay() {
+            const codeDiv = document.getElementById('codeDisplay');
+            const order = getLoopOrderArray(state.loopOrder);
+
+            let html = '';
+
+            if (state.tilingEnabled) {
+                // Tiled code
+                const ts = state.tileSize;
+                html = generateTiledCodeHTML(order, ts);
+            } else {
+                // Non-tiled code
+                html = generateNonTiledCodeHTML(order);
+            }
+
+            codeDiv.innerHTML = html;
+        }
+
+        /**
+         * Generate HTML for non-tiled loop code
+         */
+        function generateNonTiledCodeHTML(order) {
+            const iter = state.iterations[state.currentIteration];
+            const currentInner = iter ? order[2] : null;
+
+            let html = '';
+            const indent = ['', '  ', '    ', '      '];
+
+            for (let level = 0; level < 3; level++) {
+                const varName = order[level];
+                const isInnermost = level === 2;
+                const isCurrent = isInnermost && state.currentIteration < state.iterations.length;
+
+                html += `<div class="code-line${isCurrent ? ' current' : ''}">`;
+                html += `${indent[level]}<span class="code-keyword">for</span> `;
+                html += `<span class="code-var">${varName}</span> `;
+                html += `<span class="code-keyword">in</span> `;
+                html += `<span class="code-number">0</span>..<span class="code-number">${MATRIX_SIZE}</span>:`;
+                if (isCurrent && iter) {
+                    html += ` <span class="code-comment">← ${varName}=${iter[varName]}</span>`;
+                }
+                html += '</div>';
+            }
+
+            // Inner statement
+            html += `<div class="code-line">`;
+            html += `${indent[3]}C[i][j] += A[i][k] * B[k][j]`;
+            html += '</div>';
+
+            return html;
+        }
+
+        /**
+         * Generate HTML for tiled loop code
+         */
+        function generateTiledCodeHTML(order, tileSize) {
+            const iter = state.iterations[state.currentIteration];
+            const indent = ['', '  ', '    ', '      ', '        ', '          ', '            '];
+
+            let html = '';
+
+            // Tile loops
+            for (let level = 0; level < 3; level++) {
+                const varName = 't' + order[level];
+
+                html += `<div class="code-line">`;
+                html += `${indent[level]}<span class="code-keyword">for</span> `;
+                html += `<span class="code-var">${varName}</span> `;
+                html += `<span class="code-keyword">in</span> `;
+                html += `<span class="code-number">0</span>..<span class="code-number">${MATRIX_SIZE}</span> `;
+                html += `<span class="code-keyword">step</span> <span class="code-number">${tileSize}</span>:`;
+                if (iter && iter[varName] !== undefined) {
+                    html += ` <span class="code-comment">← ${varName}=${iter[varName]}</span>`;
+                }
+                html += '</div>';
+            }
+
+            // Inner element loops
+            for (let level = 0; level < 3; level++) {
+                const varName = order[level];
+                const tileVar = 't' + varName;
+                const isInnermost = level === 2;
+                const isCurrent = isInnermost && state.currentIteration < state.iterations.length;
+
+                html += `<div class="code-line${isCurrent ? ' current' : ''}">`;
+                html += `${indent[level + 3]}<span class="code-keyword">for</span> `;
+                html += `<span class="code-var">${varName}</span> `;
+                html += `<span class="code-keyword">in</span> `;
+                html += `<span class="code-var">${tileVar}</span>..<span class="code-var">${tileVar}</span>+<span class="code-number">${tileSize}</span>:`;
+                if (isCurrent && iter) {
+                    html += ` <span class="code-comment">← ${varName}=${iter[varName]}</span>`;
+                }
+                html += '</div>';
+            }
+
+            // Inner statement
+            html += `<div class="code-line">`;
+            html += `${indent[6]}C[i][j] += A[i][k] * B[k][j]`;
+            html += '</div>';
+
+            return html;
+        }
+
+        // ============================================
+        // INITIALIZATION
+        // ============================================
+        function init() {
+            console.log('Matrix Tiling & Cache Visualizer initialized');
+
+            // Initialize canvases
+            initCanvases();
+
+            // Apply initial configuration
+            applyConfiguration();
+        }
+
+        // Handle window resize for timeline canvas
+        window.addEventListener('resize', () => {
+            const timelineCanvas = document.getElementById('timeline');
+            timelineCanvas.width = timelineCanvas.offsetWidth;
+            renderTimeline();
+        });
+
+        init();
+    </script>
+</body>
+</html>
