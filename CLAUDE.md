@@ -30,6 +30,145 @@ The user provides:
 - For **code organization** (e.g., "should we split this file?"): Claude decides and informs user
 - For **ambiguous feature requirements**: Ask the user
 
+---
+
+## Architecture & Extensibility
+
+### Design Philosophy
+This project may grow to support:
+- **Partial tiling**: Tile some dimensions but not others (e.g., tile i and j, but not k)
+- **Different operations**: Convolution, other tensor operations beyond matmul
+- **Dynamic tensor configurations**: Variable number of input/output tensors
+
+Code should be structured to make these additions **safe and incremental**. New features should not break existing ones.
+
+### Current Coupling Points (Refactor Candidates)
+
+When adding new features, be aware of these tightly-coupled areas that may need abstraction:
+
+#### 1. Operation Definition (currently hardcoded to matmul)
+```
+Location: executeStep(), renderAllMatrices(), updateStateDisplay(), code display
+Current: C[i][j] += A[i][k] * B[k][j] hardcoded everywhere
+Future: Abstract "Operation" concept with:
+  - Tensor list (names, dimensions, layouts)
+  - Access pattern (which indices access which tensor)
+  - Iteration space (loop dimensions and bounds)
+  - Display strings (for code and state panels)
+```
+
+#### 2. Tiling Configuration (currently all-or-nothing)
+```
+Location: state.tilingEnabled (boolean), generateTiledIterations()
+Current: Either all dimensions tiled or none
+Future: Per-dimension config, e.g.:
+  { i: { tiled: true, size: 4 }, j: { tiled: true, size: 4 }, k: { tiled: false } }
+```
+
+#### 3. Tensor/Matrix Configuration (currently fixed A, B, C)
+```
+Location: state.stats, state.layoutA/B/C, BASE_A/B/C, HTML canvas elements
+Current: Exactly 3 matrices with hardcoded names
+Future: Dynamic tensor list with configurable properties
+```
+
+#### 4. Loop Dimensions (currently fixed to 3)
+```
+Location: All loop order arrays, iteration generators
+Current: Always [i, j, k] with 6 permutations
+Future: Variable dimension count (convolution has 7: n, c, h, w, kc, kh, kw)
+```
+
+#### 5. UI Elements (currently static HTML)
+```
+Location: index.html matrix containers, stats displays
+Current: Fixed 3-matrix layout
+Future: Dynamically generated based on operation
+```
+
+### Refactoring Guidelines
+
+**When to abstract**: Only when actually implementing a feature that needs it. Don't pre-abstract.
+
+**How to abstract safely**:
+1. Write tests/verification for existing behavior first
+2. Extract the abstraction
+3. Verify existing behavior still works
+4. Add new feature using the abstraction
+5. Verify both old and new work
+
+**Abstraction priority** (when the time comes):
+1. **Operation abstraction** - Most impactful, enables different computations
+2. **Per-dimension tiling** - Natural extension, moderate refactor
+3. **Dynamic tensors** - Requires HTML generation, larger change
+
+### Code Organization Principles
+
+**Current structure** (adequate for matmul-only):
+```
+app.js - Single file with sections:
+  - Constants
+  - State
+  - Iteration generation
+  - Cache model (already well-encapsulated)
+  - Memory addressing
+  - Rendering
+  - Simulation
+  - Code display
+  - UI handlers
+```
+
+**Future structure** (when complexity warrants):
+```
+src/
+  operations/
+    matmul.js       - Matmul-specific: access pattern, code template
+    convolution.js  - Conv-specific: access pattern, code template
+  core/
+    cache.js        - CacheSimulator (already modular)
+    iteration.js    - Generic iteration generator
+    state.js        - Application state management
+  ui/
+    renderer.js     - Matrix/tensor rendering
+    controls.js     - Playback, configuration
+    code-display.js - Loop code generation
+  app.js            - Main entry, wiring
+```
+
+**Don't split prematurely**. Current single-file structure is fine for matmul. Split when:
+- Adding a second operation type
+- File exceeds ~1500 lines
+- Clear module boundaries emerge from features
+
+### Testing Strategy for New Features
+
+Before implementing a new feature:
+1. **Document expected behavior** for edge cases
+2. **Verify current behavior** is correct (manual testing with known configurations)
+3. **Identify what should NOT change** (regression prevention)
+
+After implementing:
+1. **Test the new feature** with various configurations
+2. **Re-test existing features** to catch regressions
+3. **Test combinations** (e.g., partial tiling + column-major)
+
+### Feature Addition Checklist
+
+When adding a feature like "partial tiling" or "convolution":
+
+- [ ] Update IMPLEMENTATION_PLAN.md with feature spec
+- [ ] Identify which coupling points need abstraction
+- [ ] Create todos for incremental implementation
+- [ ] Implement abstraction layer (if needed)
+- [ ] Verify existing features still work
+- [ ] Implement new feature
+- [ ] Update UI controls
+- [ ] Update code display
+- [ ] Test combinations with existing features
+- [ ] Update this architecture section if patterns change
+
+---
+
 ## Single Source of Truth
 **`IMPLEMENTATION_PLAN.md`** is the authoritative specification document. It defines:
 - What features must exist
@@ -93,10 +232,10 @@ After implementing each major component:
 
 ```
 tiling_visualizer/
-  index.html        # HTML structure only
-  styles.css        # All CSS styles
-  app.js            # All JavaScript logic
-  CLAUDE.md         # This file - session instructions
+  index.html              # HTML structure only
+  styles.css              # All CSS styles
+  app.js                  # All JavaScript logic
+  CLAUDE.md               # This file - session instructions
   IMPLEMENTATION_PLAN.md  # Feature specification
 ```
 
@@ -114,6 +253,7 @@ tiling_visualizer/
 - Don't skip verification steps
 - Don't add "nice-to-have" features without approval
 - Don't deviate from the incremental approach
+- **Don't pre-abstract** - only refactor when a feature actually needs it
 
 ## Session Workflow Template
 ```
@@ -132,4 +272,4 @@ tiling_visualizer/
 
 ---
 
-**Remember**: Incremental, rigorous, spec-driven. Claude owns the code; user owns the algorithms.
+**Remember**: Incremental, rigorous, spec-driven. Claude owns the code; user owns the algorithms. Refactor when needed, not before.
