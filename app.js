@@ -108,7 +108,7 @@ const COLORS = {
     background: '#ffffff',
     grid: '#cccccc',
     tileGrid: '#666666',
-    cached: 'rgba(220, 53, 69, 0.6)',
+    cached: 'rgba(40, 167, 69, 0.6)',
     current: '#000000',
     currentOutline: '#667eea'
 };
@@ -529,7 +529,7 @@ function renderTimeline() {
         const barW = Math.max(1, barWidthScaled - 0.5);
 
         operation.tensors.forEach((tensor, idx) => {
-            ctxTimeline.fillStyle = h[tensor.name] ? '#dc3545' : '#333';
+            ctxTimeline.fillStyle = h[tensor.name] ? '#28a745' : '#dc3545';
             ctxTimeline.fillRect(x, idx * rowHeight + 2, barW, rowHeight - 4);
         });
     }
