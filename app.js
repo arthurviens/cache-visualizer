@@ -794,13 +794,18 @@ function togglePlayPause() {
 
 /**
  * Apply configuration from UI controls.
+ *
+ * Note on cache line count: With 3-tensor operations (A, B, C), fewer than 4 cache
+ * lines causes severe thrashing. Each iteration accesses all 3 tensors, so with
+ * N < 4 lines, at least one tensor's line is evicted before its next access.
+ * This makes spatial locality benefits impossible to observe. UI restricts to >= 4 lines.
  */
 function applyConfiguration() {
     state.loopOrder = document.getElementById('loopOrder').value;
     state.tilingEnabled = document.getElementById('tilingEnabled').checked;
     state.tileSize = parseInt(document.getElementById('tileSize').value);
 
-    // Cache configuration
+    // Cache configuration (minimum 4 lines to avoid thrashing with 3 tensors)
     state.elementsPerLine = parseInt(document.getElementById('elementsPerLine').value);
     state.numCacheLines = parseInt(document.getElementById('numCacheLines').value);
 
