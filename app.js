@@ -96,7 +96,6 @@ function createMatmulOperation(size, elementSize) {
 
 const MATRIX_SIZE = 12;
 const ELEMENT_SIZE = 4; // bytes per element
-const CACHE_LINE_SIZE = 64; // bytes per cache line
 
 // Create the operation (can be swapped for different operations in the future)
 const operation = createMatmulOperation(MATRIX_SIZE, ELEMENT_SIZE);
@@ -141,7 +140,8 @@ const state = {
     tilingEnabled: false,
     tileSize: 4,
     layouts: tensorState.layouts,  // { A: 'row', B: 'row', C: 'row' }
-    cacheSize: 256,
+    elementsPerLine: 16,  // elements per cache line
+    numCacheLines: 4,     // number of cache lines
 
     // Simulation state
     currentIteration: 0,
@@ -285,7 +285,7 @@ function generateAllIterations() {
  * LRU Cache Simulator
  */
 class CacheSimulator {
-    constructor(capacityBytes, lineSize = CACHE_LINE_SIZE) {
+    constructor(capacityBytes, lineSize) {
         this.capacityBytes = capacityBytes;
         this.lineSize = lineSize;
         this.maxLines = Math.floor(capacityBytes / lineSize);
@@ -799,7 +799,10 @@ function applyConfiguration() {
     state.loopOrder = document.getElementById('loopOrder').value;
     state.tilingEnabled = document.getElementById('tilingEnabled').checked;
     state.tileSize = parseInt(document.getElementById('tileSize').value);
-    state.cacheSize = parseInt(document.getElementById('cacheSize').value) || 256;
+
+    // Cache configuration
+    state.elementsPerLine = parseInt(document.getElementById('elementsPerLine').value);
+    state.numCacheLines = parseInt(document.getElementById('numCacheLines').value);
 
     // Read layouts for all tensors
     for (const tensor of operation.tensors) {
@@ -809,10 +812,28 @@ function applyConfiguration() {
         }
     }
 
+    // Compute cache parameters
+    const cacheLineSize = state.elementsPerLine * ELEMENT_SIZE;
+    const cacheCapacity = cacheLineSize * state.numCacheLines;
+
     state.iterations = generateAllIterations();
-    state.cache = new CacheSimulator(state.cacheSize);
+    state.cache = new CacheSimulator(cacheCapacity, cacheLineSize);
 
     resetSimulation();
+}
+
+/**
+ * Update the byte equivalent displays for cache configuration.
+ */
+function updateCacheDisplays() {
+    const elementsPerLine = parseInt(document.getElementById('elementsPerLine').value);
+    const numCacheLines = parseInt(document.getElementById('numCacheLines').value);
+
+    const lineBytes = elementsPerLine * ELEMENT_SIZE;
+    const totalBytes = lineBytes * numCacheLines;
+
+    document.getElementById('lineSizeBytes').textContent = `= ${lineBytes}B`;
+    document.getElementById('cacheSizeBytes').textContent = `= ${totalBytes}B`;
 }
 
 // =============================================================================
@@ -926,6 +947,10 @@ function setupEventHandlers() {
     document.getElementById('tilingEnabled').addEventListener('change', (e) => {
         document.getElementById('tileSize').disabled = !e.target.checked;
     });
+
+    // Cache configuration - update byte displays on change
+    document.getElementById('elementsPerLine').addEventListener('change', updateCacheDisplays);
+    document.getElementById('numCacheLines').addEventListener('change', updateCacheDisplays);
 
     // Configuration
     document.getElementById('applyConfig').addEventListener('click', applyConfiguration);

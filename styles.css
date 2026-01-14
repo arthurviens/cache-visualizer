@@ -109,6 +109,18 @@ h1 {
     cursor: pointer;
 }
 
+.cache-config {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.byte-equiv {
+    font-size: 0.75rem;
+    color: #888;
+    font-family: monospace;
+}
+
 /* ===========================================
    BUTTONS
    =========================================== */

@@ -69,8 +69,29 @@
             </div>
 
             <div class="config-group">
-                <label>Cache Size (bytes)</label>
-                <input type="number" id="cacheSize" value="256" min="64" step="64">
+                <label>Cache Line</label>
+                <div class="cache-config">
+                    <select id="elementsPerLine">
+                        <option value="2">2 elem</option>
+                        <option value="4">4 elem</option>
+                        <option value="8">8 elem</option>
+                        <option value="16" selected>16 elem</option>
+                    </select>
+                    <span class="byte-equiv" id="lineSizeBytes">= 64B</span>
+                </div>
+            </div>
+
+            <div class="config-group">
+                <label>Cache Capacity</label>
+                <div class="cache-config">
+                    <select id="numCacheLines">
+                        <option value="2">2 lines</option>
+                        <option value="4" selected>4 lines</option>
+                        <option value="8">8 lines</option>
+                        <option value="16">16 lines</option>
+                    </select>
+                    <span class="byte-equiv" id="cacheSizeBytes">= 256B</span>
+                </div>
             </div>
 
             <button class="btn" id="applyConfig">Apply & Reset</button>
