@@ -131,20 +131,10 @@
                     </div>
                 </div>
 
-                <!-- Overall Stats -->
-                <div class="stats-bar">
-                    <div class="stat-item">
-                        <div class="stat-value" id="totalMem">0</div>
-                        <div class="stat-label">Total Memory Accesses</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="stat-value" id="totalHits">0</div>
-                        <div class="stat-label">Cache Hits</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="stat-value" id="hitRate">0%</div>
-                        <div class="stat-label">Hit Rate</div>
-                    </div>
+                <!-- Memory Layout (Linear Address Space) -->
+                <div class="memory-layout-section">
+                    <div class="memory-layout-label">Memory Layout (Linear Address Space)</div>
+                    <canvas id="memoryLayout" class="memory-layout-canvas"></canvas>
                 </div>
 
                 <!-- Playback Controls -->
@@ -167,9 +157,25 @@
                     </div>
                 </div>
 
+                <!-- Overall Stats -->
+                <div class="stats-bar">
+                    <div class="stat-item">
+                        <div class="stat-value" id="totalMem">0</div>
+                        <div class="stat-label">Total Memory Accesses</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="totalHits">0</div>
+                        <div class="stat-label">Cache Hits</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="hitRate">0%</div>
+                        <div class="stat-label">Hit Rate</div>
+                    </div>
+                </div>
+
                 <!-- Timeline -->
                 <div class="timeline-section">
-                    <div class="timeline-label">Cache Hit Timeline (A | B | C)</div>
+                    <div class="timeline-label">Cache Hit Global Timeline (A | B | C)</div>
                     <canvas id="timeline" class="timeline-canvas"></canvas>
                 </div>
             </div>

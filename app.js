@@ -162,6 +162,7 @@ const state = {
 // Canvas contexts
 let canvasContexts = {};  // { A: ctx, B: ctx, C: ctx }
 let ctxTimeline;
+let ctxMemoryLayout;
 
 // Animation state
 let animationId = null;
@@ -411,6 +412,11 @@ function initCanvases() {
     const timelineCanvas = document.getElementById('timeline');
     timelineCanvas.width = timelineCanvas.offsetWidth;
     timelineCanvas.height = 60;
+
+    ctxMemoryLayout = document.getElementById('memoryLayout').getContext('2d');
+    const memoryLayoutCanvas = document.getElementById('memoryLayout');
+    memoryLayoutCanvas.width = memoryLayoutCanvas.offsetWidth;
+    memoryLayoutCanvas.height = 80;
 }
 
 /**
@@ -547,6 +553,110 @@ function renderTimeline() {
 }
 
 /**
+ * Get linear index for a tensor element based on layout.
+ * Row-major: row * size + col
+ * Col-major: col * size + row
+ */
+function getLinearIndex(row, col, layout) {
+    const size = operation.size;
+    if (layout === 'col') {
+        return col * size + row;
+    }
+    return row * size + col;
+}
+
+/**
+ * Render the memory layout visualization.
+ * Shows linear address space for each matrix with cache residency.
+ */
+function renderMemoryLayout() {
+    const canvas = ctxMemoryLayout.canvas;
+    const width = canvas.width;
+    const height = canvas.height;
+    const numTensors = operation.tensors.length;
+    const size = operation.size;
+    const numElements = size * size;  // 144 elements per matrix
+
+    // Clear canvas
+    ctxMemoryLayout.fillStyle = '#1a1a2e';
+    ctxMemoryLayout.fillRect(0, 0, width, height);
+
+    const rowHeight = height / numTensors;
+    const labelOffset = 15;
+    const barWidth = width - labelOffset;
+    const elemWidth = barWidth / numElements;
+
+    // Get current iteration for highlighting
+    const iter = state.iterations[state.currentIteration];
+
+    // Draw each tensor's memory layout
+    operation.tensors.forEach((tensor, tensorIdx) => {
+        const y = tensorIdx * rowHeight;
+        const layout = state.layouts[tensor.name];
+
+        // Label
+        ctxMemoryLayout.fillStyle = '#666';
+        ctxMemoryLayout.font = '10px monospace';
+        ctxMemoryLayout.fillText(tensor.name, 2, y + rowHeight / 2 + 3);
+
+        // Current access position (linear index)
+        let currentLinearIndex = -1;
+        if (iter) {
+            const indices = tensor.getIndices(iter);
+            currentLinearIndex = getLinearIndex(indices.row, indices.col, layout);
+        }
+
+        // Draw each element
+        for (let linearIdx = 0; linearIdx < numElements; linearIdx++) {
+            const x = labelOffset + linearIdx * elemWidth;
+
+            // Convert linear index back to row/col based on layout
+            let row, col;
+            if (layout === 'col') {
+                col = Math.floor(linearIdx / size);
+                row = linearIdx % size;
+            } else {
+                row = Math.floor(linearIdx / size);
+                col = linearIdx % size;
+            }
+
+            // Check if this element is in cache
+            const inCache = isElementInCache(tensor.name, row, col);
+
+            // Draw element
+            if (linearIdx === currentLinearIndex) {
+                // Current access - black with outline
+                ctxMemoryLayout.fillStyle = '#000000';
+                ctxMemoryLayout.fillRect(x, y + 3, Math.max(1, elemWidth - 0.5), rowHeight - 6);
+                ctxMemoryLayout.strokeStyle = '#667eea';
+                ctxMemoryLayout.lineWidth = 1;
+                ctxMemoryLayout.strokeRect(x, y + 2, Math.max(1, elemWidth), rowHeight - 4);
+            } else if (inCache) {
+                // In cache - green
+                ctxMemoryLayout.fillStyle = '#28a745';
+                ctxMemoryLayout.fillRect(x, y + 3, Math.max(1, elemWidth - 0.5), rowHeight - 6);
+            } else {
+                // Not in cache - dark background
+                ctxMemoryLayout.fillStyle = '#2a2a4a';
+                ctxMemoryLayout.fillRect(x, y + 3, Math.max(1, elemWidth - 0.5), rowHeight - 6);
+            }
+        }
+
+        // Draw cache line boundaries
+        const elementsPerLine = state.elementsPerLine;
+        ctxMemoryLayout.strokeStyle = '#555';
+        ctxMemoryLayout.lineWidth = 1;
+        for (let lineStart = 0; lineStart <= numElements; lineStart += elementsPerLine) {
+            const x = labelOffset + lineStart * elemWidth;
+            ctxMemoryLayout.beginPath();
+            ctxMemoryLayout.moveTo(x, y + 1);
+            ctxMemoryLayout.lineTo(x, y + rowHeight - 1);
+            ctxMemoryLayout.stroke();
+        }
+    });
+}
+
+/**
  * Update statistics display.
  */
 function updateStatsDisplay() {
@@ -617,6 +727,7 @@ function updateStateDisplay() {
  */
 function render() {
     renderAllTensors();
+    renderMemoryLayout();
     renderTimeline();
     updateStatsDisplay();
     updateStateDisplay();
@@ -1008,6 +1119,9 @@ function setupEventHandlers() {
     window.addEventListener('resize', () => {
         const timelineCanvas = document.getElementById('timeline');
         timelineCanvas.width = timelineCanvas.offsetWidth;
+        const memoryLayoutCanvas = document.getElementById('memoryLayout');
+        memoryLayoutCanvas.width = memoryLayoutCanvas.offsetWidth;
+        renderMemoryLayout();
         renderTimeline();
     });
 }

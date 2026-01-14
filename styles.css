@@ -239,11 +239,32 @@ h1 {
 }
 
 /* ===========================================
+   MEMORY LAYOUT (Linear Address Space)
+   =========================================== */
+
+.memory-layout-section {
+    margin-top: 20px;
+}
+
+.memory-layout-label {
+    font-size: 0.75rem;
+    color: #888;
+    margin-bottom: 5px;
+}
+
+.memory-layout-canvas {
+    width: 100%;
+    height: 80px;
+    background: #1a1a2e;
+    border-radius: 4px;
+}
+
+/* ===========================================
    TIMELINE
    =========================================== */
 
 .timeline-section {
-    margin-top: 20px;
+    margin-top: 15px;
 }
 
 .timeline-label {
