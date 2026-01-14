@@ -1017,6 +1017,12 @@ function setupEventHandlers() {
 // =============================================================================
 
 function init() {
+    // Skip initialization if essential DOM elements are missing (e.g., in test environment)
+    if (!document.getElementById('matrixA')) {
+        console.log('Skipping UI initialization (test mode)');
+        return;
+    }
+
     console.log('Cache Visualizer initialized');
     console.log(`Operation: ${operation.displayName}`);
     console.log(`Tensors: ${operation.tensors.map(t => t.name).join(', ')}`);
@@ -1026,4 +1032,17 @@ function init() {
     applyConfiguration();
 }
 
-document.addEventListener('DOMContentLoaded', init);
+// Browser: initialize on DOM ready
+if (typeof document !== 'undefined') {
+    document.addEventListener('DOMContentLoaded', init);
+}
+
+// Node.js: export for testing
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+        createMatmulOperation,
+        generateIterations,
+        generateTiledIterations,
+        CacheSimulator
+    };
+}

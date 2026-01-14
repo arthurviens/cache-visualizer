@@ -1,0 +1,10 @@
+{
+  "name": "tiling-visualizer",
+  "version": "1.0.0",
+  "description": "Matrix Tiling and Cache Behavior Visualizer",
+  "scripts": {
+    "test": "node --test"
+  },
+  "keywords": ["cache", "visualization", "tiling", "matrix-multiplication"],
+  "license": "CC0-1.0"
+}
