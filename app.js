@@ -1157,6 +1157,7 @@ if (typeof module !== 'undefined' && module.exports) {
         createMatmulOperation,
         generateIterations,
         generateTiledIterations,
-        CacheSimulator
+        CacheSimulator,
+        getLinearIndex
     };
 }

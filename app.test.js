@@ -9,7 +9,8 @@ const {
     createMatmulOperation,
     generateIterations,
     generateTiledIterations,
-    CacheSimulator
+    CacheSimulator,
+    getLinearIndex
 } = require('./app.js');
 
 // =============================================================================
@@ -53,6 +54,59 @@ describe('Operation Definition', () => {
         assert.deepStrictEqual(op.tensors[0].getIndices(iter), { row: 3, col: 7 });
         assert.deepStrictEqual(op.tensors[1].getIndices(iter), { row: 7, col: 5 });
         assert.deepStrictEqual(op.tensors[2].getIndices(iter), { row: 3, col: 5 });
+    });
+});
+
+// =============================================================================
+// Linear Index Calculation
+// =============================================================================
+
+describe('Linear Index Calculation', () => {
+    it('row-major: linearizes as row * size + col', () => {
+        // For a 12x12 matrix in row-major layout
+        assert.strictEqual(getLinearIndex(0, 0, 'row'), 0);
+        assert.strictEqual(getLinearIndex(0, 5, 'row'), 5);
+        assert.strictEqual(getLinearIndex(1, 0, 'row'), 12);
+        assert.strictEqual(getLinearIndex(2, 3, 'row'), 27);  // 2*12 + 3
+        assert.strictEqual(getLinearIndex(11, 11, 'row'), 143);  // last element
+    });
+
+    it('col-major: linearizes as col * size + row', () => {
+        // For a 12x12 matrix in column-major layout
+        assert.strictEqual(getLinearIndex(0, 0, 'col'), 0);
+        assert.strictEqual(getLinearIndex(5, 0, 'col'), 5);
+        assert.strictEqual(getLinearIndex(0, 1, 'col'), 12);
+        assert.strictEqual(getLinearIndex(3, 2, 'col'), 27);  // 2*12 + 3
+        assert.strictEqual(getLinearIndex(11, 11, 'col'), 143);  // last element
+    });
+
+    it('row-major: adjacent columns are contiguous', () => {
+        // Elements in the same row should be adjacent in memory
+        const row = 5;
+        for (let col = 0; col < 11; col++) {
+            const curr = getLinearIndex(row, col, 'row');
+            const next = getLinearIndex(row, col + 1, 'row');
+            assert.strictEqual(next - curr, 1, `col ${col} to ${col + 1}`);
+        }
+    });
+
+    it('col-major: adjacent rows are contiguous', () => {
+        // Elements in the same column should be adjacent in memory
+        const col = 5;
+        for (let row = 0; row < 11; row++) {
+            const curr = getLinearIndex(row, col, 'col');
+            const next = getLinearIndex(row + 1, col, 'col');
+            assert.strictEqual(next - curr, 1, `row ${row} to ${row + 1}`);
+        }
+    });
+
+    it('same element maps to different linear positions based on layout', () => {
+        // Element [3][7] should have different linear index in row vs col major
+        const rowMajor = getLinearIndex(3, 7, 'row');  // 3*12 + 7 = 43
+        const colMajor = getLinearIndex(3, 7, 'col');  // 7*12 + 3 = 87
+        assert.strictEqual(rowMajor, 43);
+        assert.strictEqual(colMajor, 87);
+        assert.notStrictEqual(rowMajor, colMajor);
     });
 });
 
