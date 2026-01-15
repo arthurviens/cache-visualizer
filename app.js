@@ -1069,7 +1069,23 @@ function setupEventHandlers() {
     document.getElementById('numCacheLines').addEventListener('change', updateCacheDisplays);
 
     // Configuration
-    document.getElementById('applyConfig').addEventListener('click', applyConfiguration);
+    const applyBtn = document.getElementById('applyConfig');
+    applyBtn.addEventListener('click', () => {
+        applyConfiguration();
+        applyBtn.classList.remove('needs-apply');
+    });
+
+    // Highlight apply button when config changes
+    const configInputs = [
+        'loopOrder', 'tilingEnabled', 'tileSize',
+        'layoutA', 'layoutB', 'layoutC',
+        'elementsPerLine', 'numCacheLines'
+    ];
+    configInputs.forEach(id => {
+        document.getElementById(id).addEventListener('change', () => {
+            applyBtn.classList.add('needs-apply');
+        });
+    });
 
     // Playback
     document.getElementById('playPauseBtn').addEventListener('click', togglePlayPause);
@@ -1127,6 +1143,232 @@ function setupEventHandlers() {
 }
 
 // =============================================================================
+// GUIDED TOUR
+// =============================================================================
+
+/**
+ * Tour step definitions.
+ * Each step targets a CSS selector and provides educational content.
+ * position: 'top' | 'bottom' | 'left' | 'right' | 'auto'
+ */
+const tourSteps = [
+    {
+        target: '.matrices-container',
+        title: 'Matrix Multiplication',
+        content: 'We compute C = A × B. Each cell shows a matrix element. Green highlighting indicates the element is currently in cache. The black dot shows which element is being accessed right now.',
+        position: 'bottom'
+    },
+    {
+        target: '#memoryLayout',
+        title: 'Linear Memory Layout',
+        content: 'Matrices are stored as flat arrays in memory. This bar shows each matrix\'s linear address space. Green = in cache. Vertical lines mark cache line boundaries. Watch how access patterns create different locality behaviors.',
+        position: 'top'
+    },
+    {
+        target: '.config-panel',
+        title: 'Configuration',
+        content: 'Control the simulation parameters here. Loop order changes which index varies fastest. Data layout (row/col major) changes how 2D indices map to linear memory. Cache settings control the simulated cache size.',
+        position: 'bottom'
+    },
+    {
+        target: '.playback-controls',
+        title: 'Playback Controls',
+        content: 'Step through iterations one by one, or play continuously. Use the speed slider to control animation speed. You can also jump to any iteration directly.',
+        position: 'top'
+    },
+    {
+        target: '.stats-bar',
+        title: 'Cache Statistics',
+        content: 'Track total memory accesses and cache hits. The hit rate shows cache efficiency. Better locality = higher hit rate = faster real-world performance.',
+        position: 'top'
+    },
+    {
+        target: '#timeline',
+        title: 'Cache Hit Timeline',
+        content: 'History of cache hits (green) and misses (red) for each matrix over time. Patterns here reveal locality behavior: clustered green = good locality, scattered red = poor locality.',
+        position: 'top'
+    },
+    {
+        target: '.side-panel',
+        title: 'Loop Structure & State',
+        content: 'See the actual loop code being executed, with current indices highlighted. The state panel shows exactly which iteration and operation is happening.',
+        position: 'left'
+    }
+];
+
+/**
+ * Tour state and controller.
+ */
+const tour = {
+    active: false,
+    currentStep: 0,
+    highlightedElement: null,
+
+    start() {
+        this.active = true;
+        this.currentStep = 0;
+        document.getElementById('tourOverlay').classList.remove('hidden');
+        document.getElementById('tourTooltip').classList.remove('hidden');
+        this.showStep(0);
+    },
+
+    end() {
+        this.active = false;
+        document.getElementById('tourOverlay').classList.add('hidden');
+        document.getElementById('tourTooltip').classList.add('hidden');
+        this.clearHighlight();
+    },
+
+    showStep(index) {
+        if (index < 0 || index >= tourSteps.length) return;
+
+        this.currentStep = index;
+        const step = tourSteps[index];
+
+        // Update content
+        document.getElementById('tourTitle').textContent = step.title;
+        document.getElementById('tourContent').textContent = step.content;
+        document.getElementById('tourStepIndicator').textContent = `${index + 1} / ${tourSteps.length}`;
+
+        // Update navigation buttons
+        document.getElementById('tourPrev').disabled = index === 0;
+        const nextBtn = document.getElementById('tourNext');
+        nextBtn.textContent = index === tourSteps.length - 1 ? 'Finish' : 'Next';
+
+        // Highlight target element
+        this.highlightElement(step.target);
+
+        // Position tooltip
+        this.positionTooltip(step.target, step.position);
+    },
+
+    highlightElement(selector) {
+        this.clearHighlight();
+        const element = document.querySelector(selector);
+        if (element) {
+            element.classList.add('tour-highlight');
+            this.highlightedElement = element;
+            // Scroll element into view if needed
+            element.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+    },
+
+    clearHighlight() {
+        if (this.highlightedElement) {
+            this.highlightedElement.classList.remove('tour-highlight');
+            this.highlightedElement = null;
+        }
+    },
+
+    positionTooltip(selector, preferredPosition) {
+        const tooltip = document.getElementById('tourTooltip');
+        const target = document.querySelector(selector);
+        if (!target) return;
+
+        const targetRect = target.getBoundingClientRect();
+        const tooltipRect = tooltip.getBoundingClientRect();
+        const padding = 16;
+        const arrowSpace = 12;
+
+        // Calculate available space in each direction
+        const spaceTop = targetRect.top;
+        const spaceBottom = window.innerHeight - targetRect.bottom;
+        const spaceLeft = targetRect.left;
+        const spaceRight = window.innerWidth - targetRect.right;
+
+        // Determine best position
+        let position = preferredPosition;
+        if (position === 'auto') {
+            // Choose position with most space
+            const spaces = { top: spaceTop, bottom: spaceBottom, left: spaceLeft, right: spaceRight };
+            position = Object.entries(spaces).sort((a, b) => b[1] - a[1])[0][0];
+        }
+
+        // Check if preferred position has enough space, otherwise flip
+        const tooltipHeight = tooltipRect.height;
+        const tooltipWidth = tooltipRect.width;
+
+        if (position === 'bottom' && spaceBottom < tooltipHeight + padding) {
+            position = 'top';
+        } else if (position === 'top' && spaceTop < tooltipHeight + padding) {
+            position = 'bottom';
+        } else if (position === 'left' && spaceLeft < tooltipWidth + padding) {
+            position = 'right';
+        } else if (position === 'right' && spaceRight < tooltipWidth + padding) {
+            position = 'left';
+        }
+
+        // Calculate final position
+        let top, left;
+
+        switch (position) {
+            case 'top':
+                top = targetRect.top - tooltipHeight - arrowSpace;
+                left = targetRect.left + (targetRect.width - tooltipWidth) / 2;
+                break;
+            case 'bottom':
+                top = targetRect.bottom + arrowSpace;
+                left = targetRect.left + (targetRect.width - tooltipWidth) / 2;
+                break;
+            case 'left':
+                top = targetRect.top + (targetRect.height - tooltipHeight) / 2;
+                left = targetRect.left - tooltipWidth - arrowSpace;
+                break;
+            case 'right':
+                top = targetRect.top + (targetRect.height - tooltipHeight) / 2;
+                left = targetRect.right + arrowSpace;
+                break;
+        }
+
+        // Clamp to viewport
+        top = Math.max(padding, Math.min(top, window.innerHeight - tooltipHeight - padding));
+        left = Math.max(padding, Math.min(left, window.innerWidth - tooltipWidth - padding));
+
+        tooltip.style.top = `${top}px`;
+        tooltip.style.left = `${left}px`;
+    },
+
+    next() {
+        if (this.currentStep < tourSteps.length - 1) {
+            this.showStep(this.currentStep + 1);
+        } else {
+            this.end();
+        }
+    },
+
+    prev() {
+        if (this.currentStep > 0) {
+            this.showStep(this.currentStep - 1);
+        }
+    }
+};
+
+/**
+ * Set up tour event handlers.
+ */
+function setupTourHandlers() {
+    document.getElementById('helpBtn').addEventListener('click', () => tour.start());
+    document.getElementById('tourClose').addEventListener('click', () => tour.end());
+    document.getElementById('tourNext').addEventListener('click', () => tour.next());
+    document.getElementById('tourPrev').addEventListener('click', () => tour.prev());
+
+    // Close tour on Escape key
+    document.addEventListener('keydown', (e) => {
+        if (e.code === 'Escape' && tour.active) {
+            tour.end();
+        }
+    });
+
+    // Reposition tooltip on window resize
+    window.addEventListener('resize', () => {
+        if (tour.active) {
+            const step = tourSteps[tour.currentStep];
+            tour.positionTooltip(step.target, step.position);
+        }
+    });
+}
+
+// =============================================================================
 // INITIALIZATION
 // =============================================================================
 
@@ -1143,7 +1385,15 @@ function init() {
 
     initCanvases();
     setupEventHandlers();
+    setupTourHandlers();
     applyConfiguration();
+
+    // Draw attention to help button for new users (3 pulses over 3 seconds)
+    const helpBtn = document.getElementById('helpBtn');
+    helpBtn.classList.add('attention');
+    helpBtn.addEventListener('animationend', () => {
+        helpBtn.classList.remove('attention');
+    });
 }
 
 // Browser: initialize on DOM ready

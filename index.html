@@ -8,7 +8,10 @@
 </head>
 <body>
     <div class="container">
-        <h1>Matrix Multiplication: Tiling & Cache Visualization</h1>
+        <header class="page-header">
+            <h1>Matrix Multiplication: Tiling & Cache Visualization</h1>
+            <button class="help-btn" id="helpBtn" title="Take a guided tour">?</button>
+        </header>
 
         <!-- Configuration Panel -->
         <div class="config-panel">
@@ -224,6 +227,21 @@
                     </div>
                 </div>
             </div>
+        </div>
+    </div>
+
+    <!-- Guided Tour -->
+    <div id="tourOverlay" class="tour-overlay hidden"></div>
+    <div id="tourTooltip" class="tour-tooltip hidden">
+        <div class="tour-header">
+            <span class="tour-step-indicator" id="tourStepIndicator">1 / 5</span>
+            <button class="tour-close" id="tourClose" title="Exit tour">&times;</button>
+        </div>
+        <h3 class="tour-title" id="tourTitle">Welcome</h3>
+        <p class="tour-content" id="tourContent">Tour content here</p>
+        <div class="tour-nav">
+            <button class="tour-btn" id="tourPrev">Previous</button>
+            <button class="tour-btn tour-btn-primary" id="tourNext">Next</button>
         </div>
     </div>
 

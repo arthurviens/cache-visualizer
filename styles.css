@@ -126,23 +126,33 @@ h1 {
    =========================================== */
 
 .btn {
-    background: #667eea;
-    color: #fff;
+    background: #4a4a6a;
+    color: #999;
     border: none;
     padding: 8px 16px;
     border-radius: 4px;
     cursor: pointer;
     font-size: 0.9rem;
-    transition: background 0.2s;
+    transition: all 0.3s;
 }
 
 .btn:hover {
-    background: #5a6fd6;
+    background: #5a5a7a;
+    color: #bbb;
 }
 
 .btn:disabled {
     background: #444;
     cursor: not-allowed;
+}
+
+.btn.needs-apply {
+    background: #667eea;
+    color: #fff;
+}
+
+.btn.needs-apply:hover {
+    background: #5a6fd6;
 }
 
 /* ===========================================
@@ -476,4 +486,174 @@ h1 {
     font-family: monospace;
     font-size: 0.8rem;
     color: #888;
+}
+
+/* ===========================================
+   PAGE HEADER
+   =========================================== */
+
+.page-header {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 15px;
+    margin-bottom: 20px;
+    position: relative;
+}
+
+.page-header h1 {
+    margin-bottom: 0;
+}
+
+.help-btn {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    border: 2px solid #667eea;
+    background: transparent;
+    color: #667eea;
+    font-size: 1.1rem;
+    font-weight: bold;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.help-btn:hover {
+    background: #667eea;
+    color: #fff;
+}
+
+.help-btn.attention {
+    animation: pulse-attention 1s ease-in-out 3;
+}
+
+@keyframes pulse-attention {
+    0%, 100% {
+        box-shadow: 0 0 0 0 rgba(102, 126, 234, 0);
+    }
+    50% {
+        box-shadow: 0 0 0 8px rgba(102, 126, 234, 0.4);
+    }
+}
+
+/* ===========================================
+   GUIDED TOUR
+   =========================================== */
+
+.tour-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    /* No background - the .tour-highlight box-shadow creates the darkening effect */
+    z-index: 1000;
+    pointer-events: none;
+}
+
+.tour-overlay.hidden {
+    display: none;
+}
+
+/* Highlighted element gets this class */
+.tour-highlight {
+    position: relative;
+    z-index: 1001;
+    box-shadow: 0 0 0 4px #667eea, 0 0 0 9999px rgba(0, 0, 0, 0.7);
+    border-radius: 4px;
+}
+
+.tour-tooltip {
+    position: fixed;
+    z-index: 1002;
+    background: #252540;
+    border: 1px solid #555;
+    border-radius: 8px;
+    padding: 16px;
+    max-width: 360px;
+    min-width: 280px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+}
+
+.tour-tooltip.hidden {
+    display: none;
+}
+
+.tour-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.tour-step-indicator {
+    font-size: 0.75rem;
+    color: #888;
+    font-family: monospace;
+}
+
+.tour-close {
+    background: none;
+    border: none;
+    color: #888;
+    font-size: 1.5rem;
+    cursor: pointer;
+    padding: 0;
+    line-height: 1;
+}
+
+.tour-close:hover {
+    color: #fff;
+}
+
+.tour-title {
+    margin: 0 0 8px 0;
+    font-size: 1.1rem;
+    color: #fff;
+}
+
+.tour-content {
+    margin: 0 0 16px 0;
+    font-size: 0.9rem;
+    color: #ccc;
+    line-height: 1.5;
+}
+
+.tour-nav {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+}
+
+.tour-btn {
+    padding: 8px 16px;
+    border-radius: 4px;
+    border: 1px solid #555;
+    background: #333;
+    color: #fff;
+    cursor: pointer;
+    font-size: 0.85rem;
+    transition: all 0.2s;
+}
+
+.tour-btn:hover {
+    background: #444;
+    border-color: #667eea;
+}
+
+.tour-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.tour-btn-primary {
+    background: #667eea;
+    border-color: #667eea;
+}
+
+.tour-btn-primary:hover {
+    background: #5a6fd6;
 }
