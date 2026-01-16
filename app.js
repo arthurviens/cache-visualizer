@@ -287,7 +287,8 @@ const OPERATIONS = {
 let currentMode = 'matmul';
 let operation = OPERATIONS[currentMode].create();
 
-const TOTAL_ITERATIONS = operation.getTotalIterations();
+// Note: Use operation.getTotalIterations() dynamically instead of a const
+// since the operation can change when switching modes
 
 // Rendering constants
 const CELL_SIZE = 20; // pixels per cell
@@ -592,20 +593,6 @@ function getAccessAddress(tensor, iter) {
     return getTensorAddress(tensor, indices.row, indices.col, layout);
 }
 
-/**
- * Check if a tensor element is in cache.
- */
-function isElementInCache(tensorName, row, col) {
-    if (!state.cache) return false;
-
-    const tensor = operation.tensors.find(t => t.name === tensorName);
-    if (!tensor) return false;
-
-    const layout = state.layouts[tensorName];
-    const address = getTensorAddress(tensor, row, col, layout);
-    return state.cache.isAddressCached(address);
-}
-
 // =============================================================================
 // UI GENERATION
 // =============================================================================
@@ -645,6 +632,36 @@ function generateLayoutControls() {
 /**
  * Generate tensor canvas wrappers and canvases.
  */
+// Gap between channels in multi-channel tensor visualization
+const CHANNEL_GAP = 4;
+
+/**
+ * Calculate canvas dimensions for a tensor based on its shape.
+ */
+function getTensorCanvasSize(tensor) {
+    const rows = tensor.rows;
+    const cols = tensor.cols;
+
+    if (tensor.is4D) {
+        // 4D tensor (kernel): show as grid of c_out × c_in small kernels
+        const c_out = tensor.channels_out;
+        const c_in = tensor.channels_in;
+        const width = c_in * cols * CELL_SIZE + (c_in - 1) * CHANNEL_GAP;
+        const height = c_out * rows * CELL_SIZE + (c_out - 1) * CHANNEL_GAP;
+        return { width, height };
+    } else if (tensor.is3D) {
+        // 3D tensor: show channels side-by-side horizontally
+        const channels = tensor.channels;
+        const width = channels * cols * CELL_SIZE + (channels - 1) * CHANNEL_GAP;
+        const height = rows * CELL_SIZE;
+        return { width, height };
+    } else {
+        // 2D tensor (matmul): square
+        const size = rows * CELL_SIZE;
+        return { width: size, height: size };
+    }
+}
+
 function generateTensorCanvases() {
     const container = document.getElementById('tensorsContainer');
     container.innerHTML = '';
@@ -654,7 +671,7 @@ function generateTensorCanvases() {
 
     for (let i = 0; i < tensors.length; i++) {
         const tensor = tensors[i];
-        const canvasSize = tensor.rows * CELL_SIZE;
+        const { width, height } = getTensorCanvasSize(tensor);
 
         // Add tensor wrapper
         const wrapper = document.createElement('div');
@@ -664,7 +681,7 @@ function generateTensorCanvases() {
                 <span class="matrix-name">${tensor.name}</span>
                 <span class="matrix-stats" id="stats${tensor.name}">mem:0 hit:0</span>
             </div>
-            <canvas id="matrix${tensor.name}" class="matrix-canvas" width="${canvasSize}" height="${canvasSize}"></canvas>
+            <canvas id="matrix${tensor.name}" class="matrix-canvas" width="${width}" height="${height}"></canvas>
         `;
         container.appendChild(wrapper);
 
@@ -732,13 +749,16 @@ function initCanvases() {
 
 /**
  * Render a single tensor grid.
+ * Supports 2D, 3D (with channels), and 4D (kernel) tensors.
+ *
+ * @param {Object} tensor - Tensor definition from operation
+ * @param {Object|null} currentIndices - Current access indices or null
  */
-function renderTensor(tensorName, currentRow, currentCol) {
-    const ctx = canvasContexts[tensorName];
+function renderTensor(tensor, currentIndices) {
+    const ctx = canvasContexts[tensor.name];
     if (!ctx) return;
 
     const canvas = ctx.canvas;
-    const size = operation.size;
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -746,11 +766,27 @@ function renderTensor(tensorName, currentRow, currentCol) {
     ctx.fillStyle = COLORS.background;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
+    if (tensor.is4D) {
+        render4DTensor(ctx, tensor, currentIndices);
+    } else if (tensor.is3D) {
+        render3DTensor(ctx, tensor, currentIndices);
+    } else {
+        render2DTensor(ctx, tensor, currentIndices);
+    }
+}
+
+/**
+ * Render a 2D tensor (matmul style).
+ */
+function render2DTensor(ctx, tensor, currentIndices) {
+    const rows = tensor.rows;
+    const cols = tensor.cols;
+
     // Cached elements
     if (state.cache) {
-        for (let row = 0; row < size; row++) {
-            for (let col = 0; col < size; col++) {
-                if (isElementInCache(tensorName, row, col)) {
+        for (let row = 0; row < rows; row++) {
+            for (let col = 0; col < cols; col++) {
+                if (isElementInCache2D(tensor, row, col)) {
                     ctx.fillStyle = COLORS.cached;
                     ctx.fillRect(col * CELL_SIZE, row * CELL_SIZE, CELL_SIZE, CELL_SIZE);
                 }
@@ -759,43 +795,196 @@ function renderTensor(tensorName, currentRow, currentCol) {
     }
 
     // Grid lines
-    ctx.strokeStyle = COLORS.grid;
-    ctx.lineWidth = 1;
-    for (let i = 0; i <= size; i++) {
-        ctx.beginPath();
-        ctx.moveTo(i * CELL_SIZE, 0);
-        ctx.lineTo(i * CELL_SIZE, canvas.height);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.moveTo(0, i * CELL_SIZE);
-        ctx.lineTo(canvas.width, i * CELL_SIZE);
-        ctx.stroke();
-    }
+    drawGrid(ctx, rows, cols, 0, 0);
 
     // Tile boundaries
     if (state.tilingEnabled && state.tileSize > 1) {
-        ctx.strokeStyle = COLORS.tileGrid;
-        ctx.lineWidth = 2;
-        for (let i = 0; i <= size; i += state.tileSize) {
-            ctx.beginPath();
-            ctx.moveTo(i * CELL_SIZE, 0);
-            ctx.lineTo(i * CELL_SIZE, canvas.height);
-            ctx.stroke();
-            ctx.beginPath();
-            ctx.moveTo(0, i * CELL_SIZE);
-            ctx.lineTo(canvas.width, i * CELL_SIZE);
-            ctx.stroke();
-        }
+        drawTileBoundaries(ctx, rows, cols, 0, 0);
     }
 
     // Current access indicator
-    if (currentRow !== null && currentCol !== null) {
-        ctx.fillStyle = COLORS.current;
-        ctx.fillRect(currentCol * CELL_SIZE + 3, currentRow * CELL_SIZE + 3, CELL_SIZE - 6, CELL_SIZE - 6);
-        ctx.strokeStyle = COLORS.currentOutline;
-        ctx.lineWidth = 2;
-        ctx.strokeRect(currentCol * CELL_SIZE + 1, currentRow * CELL_SIZE + 1, CELL_SIZE - 2, CELL_SIZE - 2);
+    if (currentIndices && currentIndices.row !== undefined) {
+        drawCurrentAccess(ctx, currentIndices.row, currentIndices.col, 0, 0);
     }
+}
+
+/**
+ * Render a 3D tensor (channels side-by-side).
+ */
+function render3DTensor(ctx, tensor, currentIndices) {
+    const rows = tensor.rows;
+    const cols = tensor.cols;
+    const channels = tensor.channels;
+
+    for (let c = 0; c < channels; c++) {
+        const xOffset = c * (cols * CELL_SIZE + CHANNEL_GAP);
+
+        // Cached elements for this channel
+        if (state.cache) {
+            for (let row = 0; row < rows; row++) {
+                for (let col = 0; col < cols; col++) {
+                    if (isElementInCache3D(tensor, c, row, col)) {
+                        ctx.fillStyle = COLORS.cached;
+                        ctx.fillRect(xOffset + col * CELL_SIZE, row * CELL_SIZE, CELL_SIZE, CELL_SIZE);
+                    }
+                }
+            }
+        }
+
+        // Grid lines for this channel
+        drawGrid(ctx, rows, cols, xOffset, 0);
+
+        // Channel label
+        ctx.fillStyle = '#666';
+        ctx.font = '10px sans-serif';
+        ctx.fillText(`c${c}`, xOffset + 2, rows * CELL_SIZE + 12);
+    }
+
+    // Current access indicator
+    if (currentIndices && currentIndices.channel !== undefined) {
+        const xOffset = currentIndices.channel * (cols * CELL_SIZE + CHANNEL_GAP);
+        drawCurrentAccess(ctx, currentIndices.row, currentIndices.col, xOffset, 0);
+    }
+}
+
+/**
+ * Render a 4D tensor (kernel: c_out × c_in grid of small kernels).
+ */
+function render4DTensor(ctx, tensor, currentIndices) {
+    const rows = tensor.rows;  // kernel height
+    const cols = tensor.cols;  // kernel width
+    const c_in = tensor.channels_in;
+    const c_out = tensor.channels_out;
+
+    for (let co = 0; co < c_out; co++) {
+        for (let ci = 0; ci < c_in; ci++) {
+            const xOffset = ci * (cols * CELL_SIZE + CHANNEL_GAP);
+            const yOffset = co * (rows * CELL_SIZE + CHANNEL_GAP);
+
+            // Cached elements for this kernel slice
+            if (state.cache) {
+                for (let row = 0; row < rows; row++) {
+                    for (let col = 0; col < cols; col++) {
+                        if (isElementInCache4D(tensor, co, ci, row, col)) {
+                            ctx.fillStyle = COLORS.cached;
+                            ctx.fillRect(xOffset + col * CELL_SIZE, yOffset + row * CELL_SIZE, CELL_SIZE, CELL_SIZE);
+                        }
+                    }
+                }
+            }
+
+            // Grid lines for this kernel slice
+            drawGrid(ctx, rows, cols, xOffset, yOffset);
+        }
+    }
+
+    // Axis labels
+    ctx.fillStyle = '#666';
+    ctx.font = '10px sans-serif';
+    // c_in labels (top)
+    for (let ci = 0; ci < c_in; ci++) {
+        const xOffset = ci * (cols * CELL_SIZE + CHANNEL_GAP);
+        ctx.fillText(`ci${ci}`, xOffset + 2, -2);
+    }
+    // c_out labels (left)
+    for (let co = 0; co < c_out; co++) {
+        const yOffset = co * (rows * CELL_SIZE + CHANNEL_GAP);
+        ctx.fillText(`co${co}`, -20, yOffset + rows * CELL_SIZE / 2 + 4);
+    }
+
+    // Current access indicator
+    if (currentIndices && currentIndices.c_out !== undefined) {
+        const xOffset = currentIndices.c_in * (cols * CELL_SIZE + CHANNEL_GAP);
+        const yOffset = currentIndices.c_out * (rows * CELL_SIZE + CHANNEL_GAP);
+        drawCurrentAccess(ctx, currentIndices.row, currentIndices.col, xOffset, yOffset);
+    }
+}
+
+/**
+ * Draw grid lines for a tensor slice.
+ */
+function drawGrid(ctx, rows, cols, xOffset, yOffset) {
+    ctx.strokeStyle = COLORS.grid;
+    ctx.lineWidth = 1;
+
+    for (let i = 0; i <= cols; i++) {
+        ctx.beginPath();
+        ctx.moveTo(xOffset + i * CELL_SIZE, yOffset);
+        ctx.lineTo(xOffset + i * CELL_SIZE, yOffset + rows * CELL_SIZE);
+        ctx.stroke();
+    }
+    for (let i = 0; i <= rows; i++) {
+        ctx.beginPath();
+        ctx.moveTo(xOffset, yOffset + i * CELL_SIZE);
+        ctx.lineTo(xOffset + cols * CELL_SIZE, yOffset + i * CELL_SIZE);
+        ctx.stroke();
+    }
+}
+
+/**
+ * Draw tile boundaries for a tensor slice.
+ */
+function drawTileBoundaries(ctx, rows, cols, xOffset, yOffset) {
+    ctx.strokeStyle = COLORS.tileGrid;
+    ctx.lineWidth = 2;
+
+    for (let i = 0; i <= cols; i += state.tileSize) {
+        ctx.beginPath();
+        ctx.moveTo(xOffset + i * CELL_SIZE, yOffset);
+        ctx.lineTo(xOffset + i * CELL_SIZE, yOffset + rows * CELL_SIZE);
+        ctx.stroke();
+    }
+    for (let i = 0; i <= rows; i += state.tileSize) {
+        ctx.beginPath();
+        ctx.moveTo(xOffset, yOffset + i * CELL_SIZE);
+        ctx.lineTo(xOffset + cols * CELL_SIZE, yOffset + i * CELL_SIZE);
+        ctx.stroke();
+    }
+}
+
+/**
+ * Draw current access indicator at a cell position.
+ */
+function drawCurrentAccess(ctx, row, col, xOffset, yOffset) {
+    const x = xOffset + col * CELL_SIZE;
+    const y = yOffset + row * CELL_SIZE;
+
+    ctx.fillStyle = COLORS.current;
+    ctx.fillRect(x + 3, y + 3, CELL_SIZE - 6, CELL_SIZE - 6);
+    ctx.strokeStyle = COLORS.currentOutline;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x + 1, y + 1, CELL_SIZE - 2, CELL_SIZE - 2);
+}
+
+/**
+ * Check if element is in cache for 2D tensor.
+ */
+function isElementInCache2D(tensor, row, col) {
+    const layout = state.layouts[tensor.name];
+    const address = getTensorAddress(tensor, row, col, layout);
+    return state.cache.isAddressCached(address);
+}
+
+/**
+ * Check if element is in cache for 3D tensor.
+ */
+function isElementInCache3D(tensor, channel, row, col) {
+    // Linear index for 3D: channel * (rows * cols) + row * cols + col
+    const linearIndex = channel * (tensor.rows * tensor.cols) + row * tensor.cols + col;
+    const address = tensor.baseAddress + linearIndex * operation.elementSize;
+    return state.cache.isAddressCached(address);
+}
+
+/**
+ * Check if element is in cache for 4D tensor (kernel).
+ */
+function isElementInCache4D(tensor, c_out, c_in, row, col) {
+    // Linear index for 4D: c_out * (c_in * rows * cols) + c_in * (rows * cols) + row * cols + col
+    const linearIndex = c_out * (tensor.channels_in * tensor.rows * tensor.cols) +
+                        c_in * (tensor.rows * tensor.cols) +
+                        row * tensor.cols + col;
+    const address = tensor.baseAddress + linearIndex * operation.elementSize;
+    return state.cache.isAddressCached(address);
 }
 
 /**
@@ -805,12 +994,8 @@ function renderAllTensors() {
     const iter = state.iterations[state.currentIteration];
 
     for (const tensor of operation.tensors) {
-        if (iter) {
-            const indices = tensor.getIndices(iter);
-            renderTensor(tensor.name, indices.row, indices.col);
-        } else {
-            renderTensor(tensor.name, null, null);
-        }
+        const indices = iter ? tensor.getIndices(iter) : null;
+        renderTensor(tensor, indices);
     }
 }
 
@@ -830,7 +1015,7 @@ function renderTimeline() {
 
     const rowHeight = height / numTensors;
     const labelOffset = 15;
-    const barWidthScaled = (width - labelOffset) / TOTAL_ITERATIONS;
+    const barWidthScaled = (width - labelOffset) / operation.getTotalIterations();
 
     // Labels
     ctxTimeline.fillStyle = '#666';
@@ -1009,7 +1194,7 @@ function updateStatsDisplay() {
 function updateStateDisplay() {
     const iter = state.iterations[state.currentIteration];
 
-    document.getElementById('currentIteration').textContent = `${state.currentIteration} of ${TOTAL_ITERATIONS}`;
+    document.getElementById('currentIteration').textContent = `${state.currentIteration} of ${operation.getTotalIterations()}`;
 
     if (iter) {
         // Build indices string
@@ -1029,8 +1214,8 @@ function updateStateDisplay() {
         document.getElementById('currentOp').textContent = '-';
     }
 
-    document.getElementById('jumpIteration').max = TOTAL_ITERATIONS - 1;
-    document.getElementById('totalIterations').textContent = TOTAL_ITERATIONS;
+    document.getElementById('jumpIteration').max = operation.getTotalIterations() - 1;
+    document.getElementById('totalIterations').textContent = operation.getTotalIterations();
 }
 
 /**
@@ -1509,7 +1694,7 @@ function setupEventHandlers() {
 
     // Jump to iteration
     document.getElementById('jumpIteration').addEventListener('change', (e) => {
-        const target = Math.min(Math.max(0, parseInt(e.target.value) || 0), TOTAL_ITERATIONS - 1);
+        const target = Math.min(Math.max(0, parseInt(e.target.value) || 0), operation.getTotalIterations() - 1);
         jumpToIteration(target);
         e.target.value = state.currentIteration;
     });
@@ -1558,50 +1743,64 @@ function setupEventHandlers() {
  * Each step targets a CSS selector and provides educational content.
  * position: 'top' | 'bottom' | 'left' | 'right' | 'auto'
  */
-const tourSteps = [
-    {
-        target: '.matrices-container',
-        title: 'Matrix Multiplication',
-        content: 'We compute C = A × B. Each cell shows a matrix element. Green highlighting indicates the element is currently in cache. The black dot shows which element is being accessed right now.',
-        position: 'bottom'
-    },
-    {
-        target: '#memoryLayout',
-        title: 'Linear Memory Layout',
-        content: 'Matrices are stored as flat arrays in memory. This bar shows each matrix\'s linear address space. Green = in cache. Vertical lines mark cache line boundaries. Watch how access patterns create different locality behaviors.',
-        position: 'top'
-    },
-    {
-        target: '.config-panel',
-        title: 'Configuration',
-        content: 'Control the simulation parameters here. Loop order changes which index varies fastest. Data layout (row/col major) changes how 2D indices map to linear memory. Cache settings control the simulated cache size.',
-        position: 'bottom'
-    },
-    {
-        target: '.playback-controls',
-        title: 'Playback Controls',
-        content: 'Step through iterations one by one, or play continuously. Use the speed slider to control animation speed. You can also jump to any iteration directly.',
-        position: 'top'
-    },
-    {
-        target: '.stats-bar',
-        title: 'Cache Statistics',
-        content: 'Track total memory accesses and cache hits. The hit rate shows cache efficiency. Better locality = higher hit rate = faster real-world performance.',
-        position: 'top'
-    },
-    {
-        target: '#timeline',
-        title: 'Cache Hit Timeline',
-        content: 'History of cache hits (green) and misses (red) for each matrix over time. Patterns here reveal locality behavior: clustered green = good locality, scattered red = poor locality.',
-        position: 'top'
-    },
-    {
-        target: '.side-panel',
-        title: 'Loop Structure & State',
-        content: 'See the actual loop code being executed, with current indices highlighted. The state panel shows exactly which iteration and operation is happening.',
-        position: 'left'
-    }
-];
+/**
+ * Get tour steps based on current operation.
+ * Steps are mostly generic but the first one describes the operation.
+ */
+function getTourSteps() {
+    const opIntro = operation.name === 'matmul'
+        ? 'We compute C = A × B, stepping through all i,j,k iterations.'
+        : 'We compute Output = Input * Kernel, stepping through all output positions, input channels, and kernel positions.';
+
+    const tensorDesc = operation.name === 'matmul'
+        ? 'Each cell shows a matrix element.'
+        : 'For convolution, tensors have channels shown side-by-side. The kernel shows all c_out × c_in filter slices.';
+
+    return [
+        {
+            target: '.matrices-container',
+            title: operation.displayName,
+            content: `${opIntro} ${tensorDesc} Green highlighting indicates the element is currently in cache. The black dot shows which element is being accessed.`,
+            position: 'bottom'
+        },
+        {
+            target: '#memoryLayout',
+            title: 'Linear Memory Layout',
+            content: 'Tensors are stored as flat arrays in memory. This bar shows each tensor\'s linear address space. Green = in cache. Vertical lines mark cache line boundaries. Watch how access patterns create different locality behaviors.',
+            position: 'top'
+        },
+        {
+            target: '.config-panel',
+            title: 'Configuration',
+            content: 'Control the simulation parameters here. Loop order changes which index varies fastest. Data layout (row/col major) affects how indices map to linear memory addresses. Cache settings control the simulated cache size.',
+            position: 'bottom'
+        },
+        {
+            target: '.playback-controls',
+            title: 'Playback Controls',
+            content: 'Step through iterations one by one, or play continuously. Use the speed slider to control animation speed. You can also jump to any iteration directly.',
+            position: 'top'
+        },
+        {
+            target: '.stats-bar',
+            title: 'Cache Statistics',
+            content: 'Track total memory accesses and cache hits. The hit rate shows cache efficiency. Better locality = higher hit rate = faster real-world performance.',
+            position: 'top'
+        },
+        {
+            target: '#timeline',
+            title: 'Cache Hit Timeline',
+            content: 'History of cache hits (green) and misses (red) for each tensor over time. Patterns here reveal locality behavior: clustered green = good locality, scattered red = poor locality.',
+            position: 'top'
+        },
+        {
+            target: '.side-panel',
+            title: 'Loop Structure & State',
+            content: 'See the actual loop code being executed, with current indices highlighted. The state panel shows exactly which iteration and operation is happening.',
+            position: 'left'
+        }
+    ];
+}
 
 /**
  * Tour state and controller.
@@ -1627,20 +1826,20 @@ const tour = {
     },
 
     showStep(index) {
-        if (index < 0 || index >= tourSteps.length) return;
+        if (index < 0 || index >= getTourSteps().length) return;
 
         this.currentStep = index;
-        const step = tourSteps[index];
+        const step = getTourSteps()[index];
 
         // Update content
         document.getElementById('tourTitle').textContent = step.title;
         document.getElementById('tourContent').textContent = step.content;
-        document.getElementById('tourStepIndicator').textContent = `${index + 1} / ${tourSteps.length}`;
+        document.getElementById('tourStepIndicator').textContent = `${index + 1} / ${getTourSteps().length}`;
 
         // Update navigation buttons
         document.getElementById('tourPrev').disabled = index === 0;
         const nextBtn = document.getElementById('tourNext');
-        nextBtn.textContent = index === tourSteps.length - 1 ? 'Finish' : 'Next';
+        nextBtn.textContent = index === getTourSteps().length - 1 ? 'Finish' : 'Next';
 
         // Highlight target element
         this.highlightElement(step.target);
@@ -1736,7 +1935,7 @@ const tour = {
     },
 
     next() {
-        if (this.currentStep < tourSteps.length - 1) {
+        if (this.currentStep < getTourSteps().length - 1) {
             this.showStep(this.currentStep + 1);
         } else {
             this.end();
@@ -1769,7 +1968,7 @@ function setupTourHandlers() {
     // Reposition tooltip on window resize
     window.addEventListener('resize', () => {
         if (tour.active) {
-            const step = tourSteps[tour.currentStep];
+            const step = getTourSteps()[tour.currentStep];
             tour.positionTooltip(step.target, step.position);
         }
     });
