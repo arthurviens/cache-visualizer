@@ -40,6 +40,9 @@ function createMatmulOperation(size, elementSize) {
         // Loop dimensions for this operation
         loopDims: ['i', 'j', 'k'],
 
+        // Bounds for each loop dimension
+        loopBounds: { i: size, j: size, k: size },
+
         // All valid loop orderings
         loopOrders: {
             'ijk': ['i', 'j', 'k'],
@@ -86,7 +89,172 @@ function createMatmulOperation(size, elementSize) {
         describeOp: (iter) => `A[${iter.i}][${iter.k}] × B[${iter.k}][${iter.j}] → C[${iter.i}][${iter.j}]`,
 
         // Total iterations
-        getTotalIterations: () => size * size * size
+        getTotalIterations: () => size * size * size,
+
+        // Operators displayed between tensors in visualization (length = tensors.length - 1)
+        tensorOperators: ['×', '=']
+    };
+}
+
+/**
+ * Creates the 2D convolution operation.
+ * Output[c_out][h_out][w_out] += Input[c_in][h_out+k_h][w_out+k_w] * Kernel[c_out][c_in][k_h][k_w]
+ *
+ * @param {Object} config - Configuration object
+ * @param {number} config.inputH - Input height (default 8)
+ * @param {number} config.inputW - Input width (default 8)
+ * @param {number} config.channels_in - Input channels (default 4)
+ * @param {number} config.channels_out - Output channels (default 4)
+ * @param {number} config.kernelH - Kernel height (default 3)
+ * @param {number} config.kernelW - Kernel width (default 3)
+ * @param {number} config.elementSize - Bytes per element (default 4)
+ * @returns {Object} Operation definition
+ */
+function createConv2dOperation(config = {}) {
+    const {
+        inputH = 8,
+        inputW = 8,
+        channels_in = 4,
+        channels_out = 4,
+        kernelH = 3,
+        kernelW = 3,
+        elementSize = 4
+    } = config;
+
+    // Output dimensions (valid convolution, no padding)
+    const outputH = inputH - kernelH + 1;
+    const outputW = inputW - kernelW + 1;
+
+    // Tensor sizes in elements
+    const inputSize = inputH * inputW * channels_in;
+    const kernelSize = kernelH * kernelW * channels_in * channels_out;
+    const outputSize = outputH * outputW * channels_out;
+
+    // Base addresses for each tensor
+    const BASE_INPUT = 0;
+    const BASE_KERNEL = inputSize * elementSize;
+    const BASE_OUTPUT = (inputSize + kernelSize) * elementSize;
+
+    return {
+        name: 'conv2d',
+        displayName: '2D Convolution',
+        elementSize: elementSize,
+
+        // Dimensions metadata for rendering
+        dimensions: {
+            inputH, inputW, channels_in,
+            kernelH, kernelW,
+            outputH, outputW, channels_out
+        },
+
+        // Loop dimensions for this operation (6 dimensions, no batch)
+        loopDims: ['c_out', 'h_out', 'w_out', 'c_in', 'k_h', 'k_w'],
+
+        // Bounds for each loop dimension
+        loopBounds: {
+            c_out: channels_out,
+            h_out: outputH,
+            w_out: outputW,
+            c_in: channels_in,
+            k_h: kernelH,
+            k_w: kernelW
+        },
+
+        // All valid loop orderings (subset of permutations - most educational ones)
+        loopOrders: {
+            // Standard output-major orderings
+            'c_out,h_out,w_out,c_in,k_h,k_w': ['c_out', 'h_out', 'w_out', 'c_in', 'k_h', 'k_w'],
+            'h_out,w_out,c_out,c_in,k_h,k_w': ['h_out', 'w_out', 'c_out', 'c_in', 'k_h', 'k_w'],
+            // Input-reuse orderings (better for input cache)
+            'c_in,k_h,k_w,c_out,h_out,w_out': ['c_in', 'k_h', 'k_w', 'c_out', 'h_out', 'w_out'],
+            // Kernel-reuse orderings (better for kernel cache)
+            'k_h,k_w,c_in,c_out,h_out,w_out': ['k_h', 'k_w', 'c_in', 'c_out', 'h_out', 'w_out']
+        },
+
+        // Tensor definitions
+        // For convolution, tensors have 3-4 dimensions but we linearize for memory
+        tensors: [
+            {
+                name: 'Input',
+                baseAddress: BASE_INPUT,
+                // For visualization: show as channels side-by-side, each channel is H×W
+                rows: inputH,
+                cols: inputW,
+                channels: channels_in,
+                is3D: true,
+                // Input access: Input[c_in][h_out + k_h][w_out + k_w]
+                // Linear index: c_in * (H * W) + (h_out + k_h) * W + (w_out + k_w)
+                getIndices: (iter) => ({
+                    channel: iter.c_in,
+                    row: iter.h_out + iter.k_h,
+                    col: iter.w_out + iter.k_w
+                }),
+                getLinearIndex: (iter) => {
+                    const h = iter.h_out + iter.k_h;
+                    const w = iter.w_out + iter.k_w;
+                    return iter.c_in * (inputH * inputW) + h * inputW + w;
+                }
+            },
+            {
+                name: 'Kernel',
+                baseAddress: BASE_KERNEL,
+                // For visualization: show as a grid of small kernels (c_out × c_in grid of k_h×k_w)
+                rows: kernelH,
+                cols: kernelW,
+                channels_in: channels_in,
+                channels_out: channels_out,
+                is4D: true,
+                // Kernel access: Kernel[c_out][c_in][k_h][k_w]
+                // Linear index: c_out * (C_in * K_h * K_w) + c_in * (K_h * K_w) + k_h * K_w + k_w
+                getIndices: (iter) => ({
+                    c_out: iter.c_out,
+                    c_in: iter.c_in,
+                    row: iter.k_h,
+                    col: iter.k_w
+                }),
+                getLinearIndex: (iter) => {
+                    return iter.c_out * (channels_in * kernelH * kernelW) +
+                           iter.c_in * (kernelH * kernelW) +
+                           iter.k_h * kernelW +
+                           iter.k_w;
+                }
+            },
+            {
+                name: 'Output',
+                baseAddress: BASE_OUTPUT,
+                // For visualization: show as channels side-by-side, each channel is H_out×W_out
+                rows: outputH,
+                cols: outputW,
+                channels: channels_out,
+                is3D: true,
+                // Output access: Output[c_out][h_out][w_out]
+                // Linear index: c_out * (H_out * W_out) + h_out * W_out + w_out
+                getIndices: (iter) => ({
+                    channel: iter.c_out,
+                    row: iter.h_out,
+                    col: iter.w_out
+                }),
+                getLinearIndex: (iter) => {
+                    return iter.c_out * (outputH * outputW) + iter.h_out * outputW + iter.w_out;
+                }
+            }
+        ],
+
+        // Inner statement for code display
+        codeTemplate: 'Out[c_out][h][w] += In[c_in][h+kh][w+kw] * K[c_out][c_in][kh][kw]',
+
+        // Human-readable operation description
+        describeOp: (iter) => {
+            const h_in = iter.h_out + iter.k_h;
+            const w_in = iter.w_out + iter.k_w;
+            return `In[${iter.c_in}][${h_in}][${w_in}] × K[${iter.c_out}][${iter.c_in}][${iter.k_h}][${iter.k_w}] → Out[${iter.c_out}][${iter.h_out}][${iter.w_out}]`;
+        },
+
+        // Total iterations
+        getTotalIterations: () => channels_out * outputH * outputW * channels_in * kernelH * kernelW,
+
+        // Operators displayed between tensors
+        tensorOperators: ['*', '=']
     };
 }
 
@@ -97,8 +265,27 @@ function createMatmulOperation(size, elementSize) {
 const MATRIX_SIZE = 12;
 const ELEMENT_SIZE = 4; // bytes per element
 
-// Create the operation (can be swapped for different operations in the future)
-const operation = createMatmulOperation(MATRIX_SIZE, ELEMENT_SIZE);
+// =============================================================================
+// OPERATION REGISTRY
+// =============================================================================
+
+// Registry of available operations
+const OPERATIONS = {
+    matmul: {
+        create: () => createMatmulOperation(MATRIX_SIZE, ELEMENT_SIZE),
+        title: 'Matrix Multiplication: Tiling & Cache Visualization',
+        defaultLoopOrder: 'ijk'
+    },
+    conv2d: {
+        create: () => createConv2dOperation({ elementSize: ELEMENT_SIZE }),
+        title: '2D Convolution: Tiling & Cache Visualization',
+        defaultLoopOrder: 'c_out,h_out,w_out,c_in,k_h,k_w'
+    }
+};
+
+// Current mode and operation
+let currentMode = 'matmul';
+let operation = OPERATIONS[currentMode].create();
 
 const TOTAL_ITERATIONS = operation.getTotalIterations();
 
@@ -188,26 +375,29 @@ function generateIterations(op, loopOrder) {
         throw new Error(`Unknown loop order: ${loopOrder}`);
     }
 
-    const size = op.size;
+    const bounds = op.loopBounds;
 
-    for (let outer = 0; outer < size; outer++) {
-        for (let middle = 0; middle < size; middle++) {
-            for (let inner = 0; inner < size; inner++) {
-                const indices = {};
-                indices[order[0]] = outer;
-                indices[order[1]] = middle;
-                indices[order[2]] = inner;
-
-                // Create iteration object with all loop dimensions
-                const iter = {};
-                for (const dim of op.loopDims) {
-                    iter[dim] = indices[dim];
-                }
-                iterations.push(iter);
+    // Recursive helper to generate N-dimensional nested loops
+    function nestLoops(depth, currentIndices) {
+        if (depth === order.length) {
+            // Leaf: create iteration object with all loop dimensions
+            const iter = {};
+            for (const dim of op.loopDims) {
+                iter[dim] = currentIndices[dim];
             }
+            iterations.push(iter);
+            return;
+        }
+
+        const dim = order[depth];
+        const bound = bounds[dim];
+        for (let i = 0; i < bound; i++) {
+            currentIndices[dim] = i;
+            nestLoops(depth + 1, currentIndices);
         }
     }
 
+    nestLoops(0, {});
     return iterations;
 }
 
@@ -227,44 +417,58 @@ function generateTiledIterations(op, loopOrder, tileSize) {
         throw new Error(`Unknown loop order: ${loopOrder}`);
     }
 
-    const size = op.size;
-    const numTiles = size / tileSize;
+    const bounds = op.loopBounds;
 
-    // Outer tile loops
-    for (let tOuter = 0; tOuter < numTiles; tOuter++) {
-        for (let tMiddle = 0; tMiddle < numTiles; tMiddle++) {
-            for (let tInner = 0; tInner < numTiles; tInner++) {
-                // Calculate tile base indices
-                const tileIndices = {};
-                tileIndices['t' + order[0]] = tOuter * tileSize;
-                tileIndices['t' + order[1]] = tMiddle * tileSize;
-                tileIndices['t' + order[2]] = tInner * tileSize;
+    // Calculate number of tiles per dimension
+    const numTiles = {};
+    for (const dim of order) {
+        numTiles[dim] = Math.ceil(bounds[dim] / tileSize);
+    }
 
-                // Inner element loops
-                for (let eOuter = 0; eOuter < tileSize; eOuter++) {
-                    for (let eMiddle = 0; eMiddle < tileSize; eMiddle++) {
-                        for (let eInner = 0; eInner < tileSize; eInner++) {
-                            const elemIndices = {};
-                            elemIndices[order[0]] = eOuter;
-                            elemIndices[order[1]] = eMiddle;
-                            elemIndices[order[2]] = eInner;
+    // Recursive helper for outer tile loops
+    function nestTileLoops(depth, tileIndices) {
+        if (depth === order.length) {
+            // All tile indices set, now iterate within the tile
+            nestElementLoops(0, tileIndices, {});
+            return;
+        }
 
-                            // Build iteration object
-                            const iter = {};
-                            for (const dim of op.loopDims) {
-                                const tileBase = tileIndices['t' + dim];
-                                iter[dim] = tileBase + elemIndices[dim];
-                                iter['t' + dim] = tileBase;  // tile base
-                                iter['l' + dim] = elemIndices[dim];  // local offset
-                            }
-                            iterations.push(iter);
-                        }
-                    }
-                }
-            }
+        const dim = order[depth];
+        const tiles = numTiles[dim];
+        for (let t = 0; t < tiles; t++) {
+            tileIndices['t' + dim] = t * tileSize;
+            nestTileLoops(depth + 1, tileIndices);
         }
     }
 
+    // Recursive helper for inner element loops within a tile
+    function nestElementLoops(depth, tileIndices, elemIndices) {
+        if (depth === order.length) {
+            // Leaf: create iteration object
+            const iter = {};
+            for (const dim of op.loopDims) {
+                const tileBase = tileIndices['t' + dim];
+                const local = elemIndices[dim];
+                iter[dim] = tileBase + local;
+                iter['t' + dim] = tileBase;  // tile base
+                iter['l' + dim] = local;     // local offset within tile
+            }
+            iterations.push(iter);
+            return;
+        }
+
+        const dim = order[depth];
+        const tileBase = tileIndices['t' + dim];
+        const bound = bounds[dim];
+        // Element loop within tile (clamped to actual bounds)
+        const tileEnd = Math.min(tileBase + tileSize, bound);
+        for (let e = 0; e < tileEnd - tileBase; e++) {
+            elemIndices[dim] = e;
+            nestElementLoops(depth + 1, tileIndices, elemIndices);
+        }
+    }
+
+    nestTileLoops(0, {});
     return iterations;
 }
 
@@ -363,7 +567,8 @@ class CacheSimulator {
  * @returns {number} Memory address in bytes
  */
 function getTensorAddress(tensor, row, col, layout) {
-    const size = operation.size;
+    // For simple 2D tensors (matmul)
+    const size = tensor.rows || operation.size;
     if (layout === 'col') {
         return tensor.baseAddress + (col * size + row) * operation.elementSize;
     }
@@ -372,8 +577,16 @@ function getTensorAddress(tensor, row, col, layout) {
 
 /**
  * Get memory address for a tensor access given current iteration.
+ * Supports both 2D tensors (matmul) and multi-dimensional tensors (convolution).
  */
 function getAccessAddress(tensor, iter) {
+    // If tensor has custom linear index function, use it (for multi-dimensional tensors)
+    if (tensor.getLinearIndex) {
+        const linearIndex = tensor.getLinearIndex(iter);
+        return tensor.baseAddress + linearIndex * operation.elementSize;
+    }
+
+    // Fall back to 2D row/col calculation
     const indices = tensor.getIndices(iter);
     const layout = state.layouts[tensor.name];
     return getTensorAddress(tensor, indices.row, indices.col, layout);
@@ -391,6 +604,104 @@ function isElementInCache(tensorName, row, col) {
     const layout = state.layouts[tensorName];
     const address = getTensorAddress(tensor, row, col, layout);
     return state.cache.isAddressCached(address);
+}
+
+// =============================================================================
+// UI GENERATION
+// =============================================================================
+
+/**
+ * Generate all dynamic UI elements from the current operation definition.
+ * Called on init and when switching modes.
+ */
+function generateTensorUI() {
+    generateLayoutControls();
+    generateTensorCanvases();
+    generateTensorStatsCards();
+    updateTimelineLabel();
+}
+
+/**
+ * Generate layout control dropdowns for each tensor.
+ */
+function generateLayoutControls() {
+    const container = document.getElementById('layoutControls');
+    container.innerHTML = '';
+
+    for (const tensor of operation.tensors) {
+        const item = document.createElement('div');
+        item.className = 'layout-item';
+        item.innerHTML = `
+            <span>${tensor.name}</span>
+            <select id="layout${tensor.name}">
+                <option value="row">Row-major</option>
+                <option value="col">Col-major</option>
+            </select>
+        `;
+        container.appendChild(item);
+    }
+}
+
+/**
+ * Generate tensor canvas wrappers and canvases.
+ */
+function generateTensorCanvases() {
+    const container = document.getElementById('tensorsContainer');
+    container.innerHTML = '';
+
+    const tensors = operation.tensors;
+    const operators = operation.tensorOperators || [];
+
+    for (let i = 0; i < tensors.length; i++) {
+        const tensor = tensors[i];
+        const canvasSize = tensor.rows * CELL_SIZE;
+
+        // Add tensor wrapper
+        const wrapper = document.createElement('div');
+        wrapper.className = 'matrix-wrapper';
+        wrapper.innerHTML = `
+            <div class="matrix-header">
+                <span class="matrix-name">${tensor.name}</span>
+                <span class="matrix-stats" id="stats${tensor.name}">mem:0 hit:0</span>
+            </div>
+            <canvas id="matrix${tensor.name}" class="matrix-canvas" width="${canvasSize}" height="${canvasSize}"></canvas>
+        `;
+        container.appendChild(wrapper);
+
+        // Add operator between tensors (if not last tensor)
+        if (i < operators.length) {
+            const operatorSpan = document.createElement('span');
+            operatorSpan.className = 'operator';
+            operatorSpan.textContent = operators[i];
+            container.appendChild(operatorSpan);
+        }
+    }
+}
+
+/**
+ * Generate per-tensor statistics cards.
+ */
+function generateTensorStatsCards() {
+    const container = document.getElementById('tensorStatsContainer');
+    container.innerHTML = '';
+
+    for (const tensor of operation.tensors) {
+        const card = document.createElement('div');
+        card.className = 'matrix-stat-card';
+        card.innerHTML = `
+            <div class="name">${tensor.name}</div>
+            <div class="value" id="detailStats${tensor.name}">0/0 hits</div>
+        `;
+        container.appendChild(card);
+    }
+}
+
+/**
+ * Update the timeline label with current tensor names.
+ */
+function updateTimelineLabel() {
+    const names = operation.tensors.map(t => t.name).join(' | ');
+    document.getElementById('timelineLabel').textContent = `Cache Hit Global Timeline (${names})`;
 }
 
 // =============================================================================
@@ -911,6 +1222,81 @@ function togglePlayPause() {
  * N < 4 lines, at least one tensor's line is evicted before its next access.
  * This makes spatial locality benefits impossible to observe. UI restricts to >= 4 lines.
  */
+
+// =============================================================================
+// MODE SWITCHING
+// =============================================================================
+
+/**
+ * Switch to a different operation mode (matmul, conv2d, etc.)
+ * @param {string} mode - The mode to switch to
+ */
+function switchMode(mode) {
+    if (mode === currentMode) return;
+
+    const opConfig = OPERATIONS[mode];
+    if (!opConfig || !opConfig.create) {
+        console.log(`Mode "${mode}" not yet implemented`);
+        return;
+    }
+
+    // Stop any running animation
+    stopAnimation();
+
+    currentMode = mode;
+
+    // Create new operation
+    operation = opConfig.create();
+
+    // Reinitialize tensor state for new operation
+    const newTensorState = createTensorState(operation);
+    state.layouts = newTensorState.layouts;
+    state.stats = newTensorState.stats;
+
+    // Update UI
+    document.querySelectorAll('.mode-tab').forEach(tab => {
+        tab.classList.toggle('active', tab.dataset.mode === mode);
+    });
+    document.getElementById('pageTitle').textContent = opConfig.title;
+
+    // Regenerate dynamic UI elements
+    generateTensorUI();
+    generateLoopOrderOptions();
+
+    // Reinitialize canvases
+    initCanvases();
+
+    // Set default loop order for this operation
+    state.loopOrder = opConfig.defaultLoopOrder;
+    document.getElementById('loopOrder').value = state.loopOrder;
+
+    // Apply configuration (resets simulation)
+    applyConfiguration();
+
+    console.log(`Switched to mode: ${mode}`);
+    console.log(`Tensors: ${operation.tensors.map(t => t.name).join(', ')}`);
+    console.log(`Total iterations: ${operation.getTotalIterations()}`);
+}
+
+/**
+ * Generate loop order dropdown options based on current operation.
+ */
+function generateLoopOrderOptions() {
+    const select = document.getElementById('loopOrder');
+    select.innerHTML = '';
+
+    for (const [key, order] of Object.entries(operation.loopOrders)) {
+        const option = document.createElement('option');
+        option.value = key;
+        option.textContent = `${key} (${order.join(' → ')})`;
+        select.appendChild(option);
+    }
+}
+
+// =============================================================================
+// CONFIGURATION
+// =============================================================================
+
 function applyConfiguration() {
     state.loopOrder = document.getElementById('loopOrder').value;
     state.tilingEnabled = document.getElementById('tilingEnabled').checked;
@@ -982,28 +1368,31 @@ function updateCodeDisplay() {
  */
 function generateNonTiledCodeHTML(order) {
     const iter = state.iterations[state.currentIteration];
-    const size = operation.size;
+    const bounds = operation.loopBounds;
     let html = '';
-    const indent = ['', '  ', '    ', '      '];
     const numLoops = order.length;
+
+    // Generate indentation dynamically for any number of loops
+    const getIndent = (level) => '  '.repeat(level);
 
     for (let level = 0; level < numLoops; level++) {
         const varName = order[level];
+        const bound = bounds[varName];
         const isInnermost = level === numLoops - 1;
         const isCurrent = isInnermost && state.currentIteration < state.iterations.length;
 
         html += `<div class="code-line${isCurrent ? ' current' : ''}">`;
-        html += `${indent[level]}<span class="code-keyword">for</span> `;
+        html += `${getIndent(level)}<span class="code-keyword">for</span> `;
         html += `<span class="code-var">${varName}</span> `;
         html += `<span class="code-keyword">in</span> `;
-        html += `<span class="code-number">0</span>..<span class="code-number">${size}</span>:`;
+        html += `<span class="code-number">0</span>..<span class="code-number">${bound}</span>:`;
         if (isCurrent && iter) {
             html += ` <span class="code-comment">← ${varName}=${iter[varName]}</span>`;
         }
         html += '</div>';
     }
 
-    html += `<div class="code-line">${indent[numLoops]}${operation.codeTemplate}</div>`;
+    html += `<div class="code-line">${getIndent(numLoops)}${operation.codeTemplate}</div>`;
     return html;
 }
 
@@ -1012,19 +1401,23 @@ function generateNonTiledCodeHTML(order) {
  */
 function generateTiledCodeHTML(order, tileSize) {
     const iter = state.iterations[state.currentIteration];
-    const size = operation.size;
-    const indent = ['', '  ', '    ', '      ', '        ', '          ', '            '];
+    const bounds = operation.loopBounds;
     const numLoops = order.length;
     let html = '';
 
+    // Generate indentation dynamically for any number of loops
+    const getIndent = (level) => '  '.repeat(level);
+
     // Tile loops
     for (let level = 0; level < numLoops; level++) {
-        const varName = 't' + order[level];
+        const dimName = order[level];
+        const varName = 't' + dimName;
+        const bound = bounds[dimName];
         html += `<div class="code-line">`;
-        html += `${indent[level]}<span class="code-keyword">for</span> `;
+        html += `${getIndent(level)}<span class="code-keyword">for</span> `;
         html += `<span class="code-var">${varName}</span> `;
         html += `<span class="code-keyword">in</span> `;
-        html += `<span class="code-number">0</span>..<span class="code-number">${size}</span> `;
+        html += `<span class="code-number">0</span>..<span class="code-number">${bound}</span> `;
         html += `<span class="code-keyword">step</span> <span class="code-number">${tileSize}</span>:`;
         if (iter && iter[varName] !== undefined) {
             html += ` <span class="code-comment">← ${varName}=${iter[varName]}</span>`;
@@ -1040,7 +1433,7 @@ function generateTiledCodeHTML(order, tileSize) {
         const isCurrent = isInnermost && state.currentIteration < state.iterations.length;
 
         html += `<div class="code-line${isCurrent ? ' current' : ''}">`;
-        html += `${indent[level + numLoops]}<span class="code-keyword">for</span> `;
+        html += `${getIndent(level + numLoops)}<span class="code-keyword">for</span> `;
         html += `<span class="code-var">${varName}</span> `;
         html += `<span class="code-keyword">in</span> `;
         html += `<span class="code-var">${tileVar}</span>..<span class="code-var">${tileVar}</span>+<span class="code-number">${tileSize}</span>:`;
@@ -1050,7 +1443,7 @@ function generateTiledCodeHTML(order, tileSize) {
         html += '</div>';
     }
 
-    html += `<div class="code-line">${indent[2 * numLoops]}${operation.codeTemplate}</div>`;
+    html += `<div class="code-line">${getIndent(2 * numLoops)}${operation.codeTemplate}</div>`;
     return html;
 }
 
@@ -1059,6 +1452,13 @@ function generateTiledCodeHTML(order, tileSize) {
 // =============================================================================
 
 function setupEventHandlers() {
+    // Mode switching tabs
+    document.querySelectorAll('.mode-tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+            switchMode(tab.dataset.mode);
+        });
+    });
+
     // Tiling toggle
     document.getElementById('tilingEnabled').addEventListener('change', (e) => {
         document.getElementById('tileSize').disabled = !e.target.checked;
@@ -1076,15 +1476,22 @@ function setupEventHandlers() {
     });
 
     // Highlight apply button when config changes
-    const configInputs = [
+    // Static config inputs (always present)
+    const staticConfigInputs = [
         'loopOrder', 'tilingEnabled', 'tileSize',
-        'layoutA', 'layoutB', 'layoutC',
         'elementsPerLine', 'numCacheLines'
     ];
-    configInputs.forEach(id => {
+    staticConfigInputs.forEach(id => {
         document.getElementById(id).addEventListener('change', () => {
             applyBtn.classList.add('needs-apply');
         });
+    });
+
+    // Dynamic layout controls - use event delegation on container
+    document.getElementById('layoutControls').addEventListener('change', (e) => {
+        if (e.target.tagName === 'SELECT') {
+            applyBtn.classList.add('needs-apply');
+        }
     });
 
     // Playback
@@ -1374,7 +1781,7 @@ function setupTourHandlers() {
 
 function init() {
     // Skip initialization if essential DOM elements are missing (e.g., in test environment)
-    if (!document.getElementById('matrixA')) {
+    if (!document.getElementById('tensorsContainer')) {
         console.log('Skipping UI initialization (test mode)');
         return;
     }
@@ -1382,6 +1789,10 @@ function init() {
     console.log('Cache Visualizer initialized');
     console.log(`Operation: ${operation.displayName}`);
     console.log(`Tensors: ${operation.tensors.map(t => t.name).join(', ')}`);
+
+    // Generate dynamic UI elements from operation definition
+    generateTensorUI();
+    generateLoopOrderOptions();
 
     initCanvases();
     setupEventHandlers();

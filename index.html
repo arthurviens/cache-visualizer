@@ -3,13 +3,21 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Matrix Tiling and Cache Behavior Visualizer</title>
+    <title>Tiling & Cache Behavior Visualizer</title>
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+    <!-- Mode Selection Banner -->
+    <nav class="mode-banner">
+        <div class="mode-tabs">
+            <button class="mode-tab active" data-mode="matmul">Matrix Multiply</button>
+            <button class="mode-tab" data-mode="conv2d">2D Convolution</button>
+        </div>
+    </nav>
+
     <div class="container">
         <header class="page-header">
-            <h1>Matrix Multiplication: Tiling & Cache Visualization</h1>
+            <h1 id="pageTitle">Matrix Multiplication: Tiling & Cache Visualization</h1>
             <button class="help-btn" id="helpBtn" title="Take a guided tour">?</button>
         </header>
 
@@ -46,28 +54,8 @@
 
             <div class="config-group">
                 <label>Data Layout</label>
-                <div class="layout-group">
-                    <div class="layout-item">
-                        <span>Matrix A</span>
-                        <select id="layoutA">
-                            <option value="row">Row-major</option>
-                            <option value="col">Col-major</option>
-                        </select>
-                    </div>
-                    <div class="layout-item">
-                        <span>Matrix B</span>
-                        <select id="layoutB">
-                            <option value="row">Row-major</option>
-                            <option value="col">Col-major</option>
-                        </select>
-                    </div>
-                    <div class="layout-item">
-                        <span>Matrix C</span>
-                        <select id="layoutC">
-                            <option value="row">Row-major</option>
-                            <option value="col">Col-major</option>
-                        </select>
-                    </div>
+                <div class="layout-group" id="layoutControls">
+                    <!-- Generated dynamically from operation.tensors -->
                 </div>
             </div>
 
@@ -103,35 +91,9 @@
         <div class="main-area">
             <!-- Visualization Section -->
             <div class="visualization-section">
-                <!-- Matrix Display -->
-                <div class="matrices-container">
-                    <div class="matrix-wrapper">
-                        <div class="matrix-header">
-                            <span class="matrix-name">A</span>
-                            <span class="matrix-stats" id="statsA">mem:0 hit:0</span>
-                        </div>
-                        <canvas id="matrixA" class="matrix-canvas" width="240" height="240"></canvas>
-                    </div>
-
-                    <span class="operator">x</span>
-
-                    <div class="matrix-wrapper">
-                        <div class="matrix-header">
-                            <span class="matrix-name">B</span>
-                            <span class="matrix-stats" id="statsB">mem:0 hit:0</span>
-                        </div>
-                        <canvas id="matrixB" class="matrix-canvas" width="240" height="240"></canvas>
-                    </div>
-
-                    <span class="operator">=</span>
-
-                    <div class="matrix-wrapper">
-                        <div class="matrix-header">
-                            <span class="matrix-name">C</span>
-                            <span class="matrix-stats" id="statsC">mem:0 hit:0</span>
-                        </div>
-                        <canvas id="matrixC" class="matrix-canvas" width="240" height="240"></canvas>
-                    </div>
+                <!-- Tensor Display (generated dynamically from operation) -->
+                <div class="matrices-container" id="tensorsContainer">
+                    <!-- Generated dynamically from operation.tensors -->
                 </div>
 
                 <!-- Memory Layout (Linear Address Space) -->
@@ -178,7 +140,7 @@
 
                 <!-- Timeline -->
                 <div class="timeline-section">
-                    <div class="timeline-label">Cache Hit Global Timeline (A | B | C)</div>
+                    <div class="timeline-label" id="timelineLabel">Cache Hit Global Timeline (A | B | C)</div>
                     <canvas id="timeline" class="timeline-canvas"></canvas>
                 </div>
             </div>
@@ -208,22 +170,11 @@
                     </div>
                 </div>
 
-                <!-- Per-Matrix Stats -->
+                <!-- Per-Tensor Stats -->
                 <div class="panel-section">
-                    <div class="panel-title">Per-Matrix Statistics</div>
-                    <div class="matrix-stats-grid">
-                        <div class="matrix-stat-card">
-                            <div class="name">A</div>
-                            <div class="value" id="detailStatsA">0/0 hits</div>
-                        </div>
-                        <div class="matrix-stat-card">
-                            <div class="name">B</div>
-                            <div class="value" id="detailStatsB">0/0 hits</div>
-                        </div>
-                        <div class="matrix-stat-card">
-                            <div class="name">C</div>
-                            <div class="value" id="detailStatsC">0/0 hits</div>
-                        </div>
+                    <div class="panel-title">Per-Tensor Statistics</div>
+                    <div class="matrix-stats-grid" id="tensorStatsContainer">
+                        <!-- Generated dynamically from operation.tensors -->
                     </div>
                 </div>
             </div>

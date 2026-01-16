@@ -34,6 +34,51 @@ h1 {
 }
 
 /* ===========================================
+   MODE BANNER
+   =========================================== */
+
+.mode-banner {
+    max-width: 1400px;
+    margin: 0 auto 20px auto;
+}
+
+.mode-tabs {
+    display: flex;
+    gap: 4px;
+    background: #252540;
+    padding: 6px;
+    border-radius: 8px;
+    width: fit-content;
+}
+
+.mode-tab {
+    background: transparent;
+    border: none;
+    color: #888;
+    padding: 10px 20px;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.mode-tab:hover {
+    color: #ccc;
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.mode-tab.active {
+    background: #667eea;
+    color: #fff;
+}
+
+.mode-tab:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+
+/* ===========================================
    CONFIGURATION PANEL
    =========================================== */
 
