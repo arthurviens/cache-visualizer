@@ -1117,7 +1117,7 @@ function renderMemoryLayout() {
             }
 
             // Check if this element is in cache
-            const inCache = isElementInCache(tensor.name, row, col);
+            const inCache = isElementInCache2D(tensor, row, col);
 
             // Draw element
             if (linearIdx === currentLinearIndex) {
@@ -2018,6 +2018,7 @@ if (typeof module !== 'undefined' && module.exports) {
         generateIterations,
         generateTiledIterations,
         CacheSimulator,
-        getLinearIndex
+        getLinearIndex,
+        getTensorAddress
     };
 }

@@ -10,7 +10,8 @@ const {
     generateIterations,
     generateTiledIterations,
     CacheSimulator,
-    getLinearIndex
+    getLinearIndex,
+    getTensorAddress
 } = require('./app.js');
 
 // =============================================================================
@@ -327,5 +328,72 @@ describe('Cache Behavior', () => {
         }
         // Element 8 is different line
         assert.strictEqual(cache.access(32), false);
+    });
+});
+
+// =============================================================================
+// Tensor Address Calculation (for memory layout visualization)
+// =============================================================================
+
+describe('Tensor Address Calculation', () => {
+    const op = createMatmulOperation(12, 4);
+    const tensorA = op.tensors[0];  // A, baseAddress = 0
+    const tensorB = op.tensors[1];  // B, baseAddress = 576
+    const tensorC = op.tensors[2];  // C, baseAddress = 1152
+
+    it('row-major: consecutive columns are adjacent in memory', () => {
+        // For row-major, elements in the same row are contiguous
+        const addr0 = getTensorAddress(tensorA, 0, 0, 'row');
+        const addr1 = getTensorAddress(tensorA, 0, 1, 'row');
+        const addr2 = getTensorAddress(tensorA, 0, 2, 'row');
+
+        assert.strictEqual(addr1 - addr0, 4);  // 4 bytes apart
+        assert.strictEqual(addr2 - addr1, 4);
+    });
+
+    it('col-major: consecutive rows are adjacent in memory', () => {
+        // For col-major, elements in the same column are contiguous
+        const addr0 = getTensorAddress(tensorA, 0, 0, 'col');
+        const addr1 = getTensorAddress(tensorA, 1, 0, 'col');
+        const addr2 = getTensorAddress(tensorA, 2, 0, 'col');
+
+        assert.strictEqual(addr1 - addr0, 4);  // 4 bytes apart
+        assert.strictEqual(addr2 - addr1, 4);
+    });
+
+    it('different tensors have non-overlapping address ranges', () => {
+        // Get address range for each tensor (all elements)
+        const aMax = getTensorAddress(tensorA, 11, 11, 'row');
+        const bMin = getTensorAddress(tensorB, 0, 0, 'row');
+        const bMax = getTensorAddress(tensorB, 11, 11, 'row');
+        const cMin = getTensorAddress(tensorC, 0, 0, 'row');
+
+        assert.ok(aMax < bMin, 'A should end before B starts');
+        assert.ok(bMax < cMin, 'B should end before C starts');
+    });
+
+    it('cache can track tensor elements correctly', () => {
+        // This test verifies the integration between getTensorAddress and CacheSimulator
+        // which is the core of isElementInCache2D functionality
+        const cache = new CacheSimulator(256, 64);  // 16 elements per line
+
+        // Access element A[0][0] (address 0)
+        const addrA00 = getTensorAddress(tensorA, 0, 0, 'row');
+        cache.access(addrA00);
+
+        // Element A[0][5] should be in same cache line (row-major, elements 0-15 in line)
+        const addrA05 = getTensorAddress(tensorA, 0, 5, 'row');
+        assert.ok(cache.isAddressCached(addrA05), 'A[0][5] should be cached');
+
+        // Element A[1][0] is in a different cache line (element 12 in linear order)
+        // Actually, A[1][0] is at linear index 12, which is 48 bytes from start
+        // Cache line is 64 bytes, so 0-63 are in one line
+        // A[1][0] is at offset 12*4 = 48, still in first line
+        const addrA10 = getTensorAddress(tensorA, 1, 0, 'row');
+        assert.ok(cache.isAddressCached(addrA10), 'A[1][0] should be cached (same 64B line)');
+
+        // Element B[0][0] is NOT cached (different tensor, different address)
+        const addrB00 = getTensorAddress(tensorB, 0, 0, 'row');
+        assert.ok(!cache.isAddressCached(addrB00), 'B[0][0] should not be cached');
     });
 });
