@@ -7,6 +7,7 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert');
 const {
     createMatmulOperation,
+    createConv2dOperation,
     generateIterations,
     generateTiledIterations,
     CacheSimulator,
@@ -395,5 +396,199 @@ describe('Tensor Address Calculation', () => {
         // Element B[0][0] is NOT cached (different tensor, different address)
         const addrB00 = getTensorAddress(tensorB, 0, 0, 'row');
         assert.ok(!cache.isAddressCached(addrB00), 'B[0][0] should not be cached');
+    });
+});
+
+// =============================================================================
+// Conv2D Operation Definition
+// =============================================================================
+
+describe('Conv2D Operation Definition', () => {
+    it('creates correct structure with default config', () => {
+        const op = createConv2dOperation();
+        assert.strictEqual(op.name, 'conv2d');
+        assert.strictEqual(op.tensors.length, 3);
+        assert.strictEqual(op.loopDims.length, 6);
+    });
+
+    it('has correct tensor names', () => {
+        const op = createConv2dOperation();
+        const names = op.tensors.map(t => t.name);
+        assert.deepStrictEqual(names, ['Input', 'Kernel', 'Output']);
+    });
+
+    it('has correct loop dimensions', () => {
+        const op = createConv2dOperation();
+        assert.deepStrictEqual(op.loopDims, ['c_out', 'h_out', 'w_out', 'c_in', 'k_h', 'k_w']);
+    });
+
+    it('computes correct output dimensions', () => {
+        // Default: inputH=8, inputW=8, kernelH=3, kernelW=3
+        // Output: (8-3+1) x (8-3+1) = 6x6
+        const op = createConv2dOperation();
+        assert.strictEqual(op.dimensions.outputH, 6);
+        assert.strictEqual(op.dimensions.outputW, 6);
+    });
+
+    it('computes correct total iterations', () => {
+        // c_out=4, h_out=6, w_out=6, c_in=4, k_h=3, k_w=3
+        // Total: 4 * 6 * 6 * 4 * 3 * 3 = 5184
+        const op = createConv2dOperation();
+        assert.strictEqual(op.getTotalIterations(), 4 * 6 * 6 * 4 * 3 * 3);
+    });
+
+    it('has non-overlapping tensor addresses', () => {
+        const op = createConv2dOperation();
+        const [input, kernel, output] = op.tensors;
+
+        // Input ends before Kernel starts
+        const inputSize = 8 * 8 * 4;  // H * W * C_in
+        assert.strictEqual(kernel.baseAddress, inputSize * 4);
+
+        // Kernel ends before Output starts
+        const kernelSize = 4 * 4 * 3 * 3;  // C_out * C_in * K_h * K_w
+        assert.strictEqual(output.baseAddress, (inputSize + kernelSize) * 4);
+    });
+
+    it('allows custom configuration', () => {
+        const op = createConv2dOperation({
+            inputH: 16,
+            inputW: 16,
+            channels_in: 8,
+            channels_out: 16,
+            kernelH: 5,
+            kernelW: 5
+        });
+
+        assert.strictEqual(op.dimensions.inputH, 16);
+        assert.strictEqual(op.dimensions.inputW, 16);
+        assert.strictEqual(op.dimensions.channels_in, 8);
+        assert.strictEqual(op.dimensions.channels_out, 16);
+        assert.strictEqual(op.dimensions.outputH, 12);  // 16 - 5 + 1
+        assert.strictEqual(op.dimensions.outputW, 12);
+    });
+});
+
+// =============================================================================
+// Conv2D Iteration Generator
+// =============================================================================
+
+describe('Conv2D Iteration Generator', () => {
+    const op = createConv2dOperation({
+        inputH: 4,
+        inputW: 4,
+        channels_in: 2,
+        channels_out: 2,
+        kernelH: 2,
+        kernelW: 2
+    });
+    // Output: 3x3, total iterations: 2 * 3 * 3 * 2 * 2 * 2 = 144
+
+    it('generates correct count', () => {
+        const iters = generateIterations(op, 'c_out,h_out,w_out,c_in,k_h,k_w');
+        assert.strictEqual(iters.length, op.getTotalIterations());
+    });
+
+    it('stays within bounds', () => {
+        const iters = generateIterations(op, 'c_out,h_out,w_out,c_in,k_h,k_w');
+        for (const iter of iters) {
+            assert.ok(iter.c_out >= 0 && iter.c_out < 2, `c_out=${iter.c_out}`);
+            assert.ok(iter.h_out >= 0 && iter.h_out < 3, `h_out=${iter.h_out}`);
+            assert.ok(iter.w_out >= 0 && iter.w_out < 3, `w_out=${iter.w_out}`);
+            assert.ok(iter.c_in >= 0 && iter.c_in < 2, `c_in=${iter.c_in}`);
+            assert.ok(iter.k_h >= 0 && iter.k_h < 2, `k_h=${iter.k_h}`);
+            assert.ok(iter.k_w >= 0 && iter.k_w < 2, `k_w=${iter.k_w}`);
+        }
+    });
+
+    it('covers all combinations exactly once', () => {
+        const iters = generateIterations(op, 'c_out,h_out,w_out,c_in,k_h,k_w');
+        const seen = new Set(iters.map(it =>
+            `${it.c_out},${it.h_out},${it.w_out},${it.c_in},${it.k_h},${it.k_w}`
+        ));
+        assert.strictEqual(seen.size, op.getTotalIterations());
+    });
+
+    it('outermost loop varies slowest', () => {
+        const iters = generateIterations(op, 'c_out,h_out,w_out,c_in,k_h,k_w');
+        // First half should have c_out=0
+        const halfCount = op.getTotalIterations() / 2;
+        for (let i = 0; i < halfCount; i++) {
+            assert.strictEqual(iters[i].c_out, 0, `iter ${i}`);
+        }
+        // Second half should have c_out=1
+        for (let i = halfCount; i < op.getTotalIterations(); i++) {
+            assert.strictEqual(iters[i].c_out, 1, `iter ${i}`);
+        }
+    });
+
+    it('tiled iteration generates correct count', () => {
+        const iters = generateTiledIterations(op, 'c_out,h_out,w_out,c_in,k_h,k_w', 2);
+        assert.strictEqual(iters.length, op.getTotalIterations());
+    });
+
+    it('tiled iteration covers all combinations exactly once', () => {
+        const iters = generateTiledIterations(op, 'c_out,h_out,w_out,c_in,k_h,k_w', 2);
+        const seen = new Set(iters.map(it =>
+            `${it.c_out},${it.h_out},${it.w_out},${it.c_in},${it.k_h},${it.k_w}`
+        ));
+        assert.strictEqual(seen.size, op.getTotalIterations());
+    });
+
+    it('tiled iteration has correct tile indices', () => {
+        const iters = generateTiledIterations(op, 'c_out,h_out,w_out,c_in,k_h,k_w', 2);
+        for (const iter of iters) {
+            // Tile indices should be multiples of tile size
+            assert.strictEqual(iter.tc_out % 2, 0, `tc_out=${iter.tc_out}`);
+            assert.strictEqual(iter.th_out % 2, 0, `th_out=${iter.th_out}`);
+            assert.strictEqual(iter.tw_out % 2, 0, `tw_out=${iter.tw_out}`);
+            assert.strictEqual(iter.tc_in % 2, 0, `tc_in=${iter.tc_in}`);
+            assert.strictEqual(iter.tk_h % 2, 0, `tk_h=${iter.tk_h}`);
+            assert.strictEqual(iter.tk_w % 2, 0, `tk_w=${iter.tk_w}`);
+
+            // Element indices should be within tile
+            assert.ok(iter.c_out >= iter.tc_out && iter.c_out < iter.tc_out + 2);
+            assert.ok(iter.h_out >= iter.th_out && iter.h_out < iter.th_out + 2);
+            assert.ok(iter.w_out >= iter.tw_out && iter.w_out < iter.tw_out + 2);
+            assert.ok(iter.c_in >= iter.tc_in && iter.c_in < iter.tc_in + 2);
+            assert.ok(iter.k_h >= iter.tk_h && iter.k_h < iter.tk_h + 2);
+            assert.ok(iter.k_w >= iter.tk_w && iter.k_w < iter.tk_w + 2);
+        }
+    });
+});
+
+// =============================================================================
+// Conv2D Linear Index Calculation
+// =============================================================================
+
+describe('Conv2D Linear Index Calculation', () => {
+    const op = createConv2dOperation();
+    const [input, kernel, output] = op.tensors;
+
+    it('Input tensor: linear index calculation', () => {
+        // Input[c_in][h][w] - linear: c_in * (H * W) + h * W + w
+        const iter = { c_in: 1, h_out: 2, w_out: 3, k_h: 1, k_w: 0, c_out: 0 };
+        // Input access: h = h_out + k_h = 3, w = w_out + k_w = 3
+        const linearIdx = input.getLinearIndex(iter);
+        // Expected: 1 * (8 * 8) + 3 * 8 + 3 = 64 + 24 + 3 = 91
+        assert.strictEqual(linearIdx, 91);
+    });
+
+    it('Kernel tensor: linear index calculation', () => {
+        // Kernel[c_out][c_in][k_h][k_w]
+        // Linear: c_out * (C_in * K_h * K_w) + c_in * (K_h * K_w) + k_h * K_w + k_w
+        const iter = { c_out: 1, c_in: 2, k_h: 1, k_w: 2, h_out: 0, w_out: 0 };
+        const linearIdx = kernel.getLinearIndex(iter);
+        // Expected: 1 * (4 * 3 * 3) + 2 * (3 * 3) + 1 * 3 + 2 = 36 + 18 + 3 + 2 = 59
+        assert.strictEqual(linearIdx, 59);
+    });
+
+    it('Output tensor: linear index calculation', () => {
+        // Output[c_out][h_out][w_out]
+        // Linear: c_out * (H_out * W_out) + h_out * W_out + w_out
+        const iter = { c_out: 2, h_out: 3, w_out: 4, c_in: 0, k_h: 0, k_w: 0 };
+        const linearIdx = output.getLinearIndex(iter);
+        // Expected: 2 * (6 * 6) + 3 * 6 + 4 = 72 + 18 + 4 = 94
+        assert.strictEqual(linearIdx, 94);
     });
 });

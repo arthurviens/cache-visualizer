@@ -1064,18 +1064,29 @@ function getLinearIndex(row, col, layout) {
 /**
  * Render the memory layout visualization.
  * Shows linear address space for each matrix with cache residency.
+ * Currently only supports matmul (2D tensors of equal size).
  */
 function renderMemoryLayout() {
     const canvas = ctxMemoryLayout.canvas;
     const width = canvas.width;
     const height = canvas.height;
-    const numTensors = operation.tensors.length;
-    const size = operation.size;
-    const numElements = size * size;  // 144 elements per matrix
 
     // Clear canvas
     ctxMemoryLayout.fillStyle = '#1a1a2e';
     ctxMemoryLayout.fillRect(0, 0, width, height);
+
+    // Memory layout visualization only supports matmul currently
+    // Conv2d tensors have different shapes (3D, 4D) which need a different visualization
+    if (operation.name !== 'matmul') {
+        ctxMemoryLayout.fillStyle = '#666';
+        ctxMemoryLayout.font = '12px sans-serif';
+        ctxMemoryLayout.fillText('Memory layout visualization not available for ' + operation.displayName, 10, height / 2 + 4);
+        return;
+    }
+
+    const numTensors = operation.tensors.length;
+    const size = operation.size;
+    const numElements = size * size;  // 144 elements per matrix
 
     const rowHeight = height / numTensors;
     const labelOffset = 15;
@@ -2015,6 +2026,7 @@ if (typeof document !== 'undefined') {
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         createMatmulOperation,
+        createConv2dOperation,
         generateIterations,
         generateTiledIterations,
         CacheSimulator,
