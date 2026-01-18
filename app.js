@@ -298,7 +298,8 @@ const COLORS = {
     tileGrid: '#666666',
     cached: 'rgba(40, 167, 69, 0.6)',
     current: '#000000',
-    currentOutline: '#667eea'
+    currentOutline: '#667eea',
+    currentSlice: '#667eea'  // border highlight for active slice
 };
 
 // =============================================================================
@@ -1043,9 +1044,26 @@ function render3DTensor(ctx, tensor, currentIndices) {
         ctx.globalAlpha = 1.0;
     }
 
-    // Current access indicator (always on top with full opacity)
+    // Current slice highlight and access indicator (always on top with full opacity)
     if (currentIndices && currentIndices.channel !== undefined) {
         const c = currentIndices.channel;
+
+        // Highlight current slice border
+        const sliceOffsetX = c * ISO.depthOffsetX;
+        const sliceOffsetY = c * ISO.depthOffsetY;
+        const sliceCorners = [
+            { x: baseX + sliceOffsetX, y: baseY + sliceOffsetY },
+            { x: baseX + sliceOffsetX + cols * CELL_SIZE, y: baseY + sliceOffsetY },
+            { x: baseX + sliceOffsetX + cols * CELL_SIZE, y: baseY + sliceOffsetY + rows * CELL_SIZE },
+            { x: baseX + sliceOffsetX, y: baseY + sliceOffsetY + rows * CELL_SIZE }
+        ];
+        drawParallelogram(ctx, sliceCorners, {
+            strokeColor: COLORS.currentSlice,
+            lineWidth: 2,
+            alpha: 1.0
+        });
+
+        // Current cell indicator
         const pos = isoPosition(currentIndices.row, currentIndices.col, c, baseX, baseY);
         drawCurrentAccessCell(ctx, pos.x, pos.y, 1.0);
     }
@@ -1147,7 +1165,7 @@ function render4DTensor(ctx, tensor, currentIndices) {
         }
     }
 
-    // Current access indicator (always on top with full opacity)
+    // Current slice highlight and access indicator (always on top with full opacity)
     if (currentIndices && currentIndices.c_out !== undefined) {
         const co = currentIndices.c_out;
         const ci = currentIndices.c_in;
@@ -1155,9 +1173,23 @@ function render4DTensor(ctx, tensor, currentIndices) {
 
         const sliceX = baseX + ci * ISO.depthOffsetX;
         const sliceY = rowBaseY + ci * ISO.depthOffsetY;
+
+        // Highlight current slice border
+        const sliceCorners = [
+            { x: sliceX, y: sliceY },
+            { x: sliceX + kCols * CELL_SIZE, y: sliceY },
+            { x: sliceX + kCols * CELL_SIZE, y: sliceY + kRows * CELL_SIZE },
+            { x: sliceX, y: sliceY + kRows * CELL_SIZE }
+        ];
+        drawParallelogram(ctx, sliceCorners, {
+            strokeColor: COLORS.currentSlice,
+            lineWidth: 2,
+            alpha: 1.0
+        });
+
+        // Current cell indicator
         const cellX = sliceX + currentIndices.col * CELL_SIZE;
         const cellY = sliceY + currentIndices.row * CELL_SIZE;
-
         drawCurrentAccessCell(ctx, cellX, cellY, 1.0);
     }
 }
