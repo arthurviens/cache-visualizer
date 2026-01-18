@@ -1,8 +1,9 @@
 /**
- * Matrix Tiling and Cache Behavior Visualizer
+ * Tensor Operations Cache Behavior Visualizer
  *
  * An educational tool for visualizing how iteration orders, tiling strategies,
- * and data layouts affect cache behavior during matrix operations.
+ * and data layouts affect cache behavior during tensor operations
+ * (matrix multiplication and 2D convolution).
  */
 
 // =============================================================================
@@ -10,14 +11,23 @@
 // =============================================================================
 //
 // An Operation defines:
-// - tensors: The tensors involved (name, dimensions, base address)
-// - loopDims: The loop dimensions (e.g., ['i', 'j', 'k'] for matmul)
-// - getAccesses(indices): Given loop indices, returns array of memory accesses
-// - codeTemplate: How to display the inner statement
-// - describeOp(indices): Human-readable description of current operation
+// - name, displayName: Operation identifiers
+// - tensors: Array of tensor definitions with access patterns
+// - loopDims: Loop dimension names (e.g., ['i', 'j', 'k'] for matmul)
+// - loopBounds: Bounds for each loop dimension
+// - loopOrders: Available loop orderings
+// - tileableDims: Which dimensions can be tiled
+// - tileSizes: Available tile sizes
+// - codeTemplate: Inner statement for code display
+// - describeOp(iter): Human-readable description of current operation
+// - getTotalIterations(): Total number of iterations
 //
-// This abstraction allows adding new operations (convolution, etc.) without
-// changing the core simulation logic.
+// Each tensor defines:
+// - name, baseAddress, rows, cols (and channels for 3D/4D)
+// - getIndices(iter): Map loop indices to tensor coordinates
+// - getLinearIndex(iter, layout): For multi-dimensional tensors
+// - layoutOptions: Available data layouts (optional)
+//
 // =============================================================================
 
 /**

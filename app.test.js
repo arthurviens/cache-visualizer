@@ -1,5 +1,13 @@
 /**
- * Unit Tests for Cache Visualizer
+ * Unit Tests for Tensor Operations Cache Visualizer
+ *
+ * Tests cover:
+ * - Operation definitions (matmul, conv2d)
+ * - Iteration generation (non-tiled and tiled)
+ * - Partial tiling for convolution
+ * - Cache simulation (LRU eviction)
+ * - Tensor address calculation
+ *
  * Run with: npm test
  */
 
@@ -56,6 +64,12 @@ describe('Operation Definition', () => {
         assert.deepStrictEqual(op.tensors[0].getIndices(iter), { row: 3, col: 7 });
         assert.deepStrictEqual(op.tensors[1].getIndices(iter), { row: 7, col: 5 });
         assert.deepStrictEqual(op.tensors[2].getIndices(iter), { row: 3, col: 5 });
+    });
+
+    it('has tiling configuration for all dimensions', () => {
+        const op = createMatmulOperation(12, 4);
+        assert.deepStrictEqual(op.tileableDims, ['i', 'j', 'k']);
+        assert.deepStrictEqual(op.tileSizes, [2, 4, 6]);
     });
 });
 
@@ -466,6 +480,13 @@ describe('Conv2D Operation Definition', () => {
         assert.strictEqual(op.dimensions.channels_out, 16);
         assert.strictEqual(op.dimensions.outputH, 12);  // 16 - 5 + 1
         assert.strictEqual(op.dimensions.outputW, 12);
+    });
+
+    it('has partial tiling configuration for spatial dimensions only', () => {
+        const op = createConv2dOperation();
+        // Only h_out and w_out are tiled (not c_out, c_in, k_h, k_w)
+        assert.deepStrictEqual(op.tileableDims, ['h_out', 'w_out']);
+        assert.deepStrictEqual(op.tileSizes, [2, 4]);
     });
 });
 
