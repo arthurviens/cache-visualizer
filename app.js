@@ -1778,7 +1778,7 @@ function generateLoopOrderOptions() {
     for (const [key, order] of Object.entries(operation.loopOrders)) {
         const option = document.createElement('option');
         option.value = key;
-        option.textContent = `${key} (${order.join(' → ')})`;
+        option.textContent = order.join(' → ');
         select.appendChild(option);
     }
 }
