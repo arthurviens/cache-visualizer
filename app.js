@@ -182,17 +182,27 @@ function createConv2dOperation(config = {}) {
                 cols: inputW,
                 channels: channels_in,
                 is3D: true,
+                // Layout options for this tensor
+                layoutOptions: [
+                    { value: 'CHW', label: 'CHW' },
+                    { value: 'HWC', label: 'HWC' }
+                ],
                 // Input access: Input[c_in][h_out + k_h][w_out + k_w]
-                // Linear index: c_in * (H * W) + (h_out + k_h) * W + (w_out + k_w)
                 getIndices: (iter) => ({
                     channel: iter.c_in,
                     row: iter.h_out + iter.k_h,
                     col: iter.w_out + iter.k_w
                 }),
-                getLinearIndex: (iter) => {
+                getLinearIndex: (iter, layout) => {
+                    const c = iter.c_in;
                     const h = iter.h_out + iter.k_h;
                     const w = iter.w_out + iter.k_w;
-                    return iter.c_in * (inputH * inputW) + h * inputW + w;
+                    if (layout === 'HWC') {
+                        // HWC: h * (W * C) + w * C + c
+                        return h * (inputW * channels_in) + w * channels_in + c;
+                    }
+                    // CHW (default): c * (H * W) + h * W + w
+                    return c * (inputH * inputW) + h * inputW + w;
                 }
             },
             {
@@ -204,19 +214,33 @@ function createConv2dOperation(config = {}) {
                 channels_in: channels_in,
                 channels_out: channels_out,
                 is4D: true,
+                // Layout options for kernel
+                layoutOptions: [
+                    { value: 'OIHW', label: 'OIHW' },
+                    { value: 'HWIO', label: 'HWIO' }
+                ],
                 // Kernel access: Kernel[c_out][c_in][k_h][k_w]
-                // Linear index: c_out * (C_in * K_h * K_w) + c_in * (K_h * K_w) + k_h * K_w + k_w
                 getIndices: (iter) => ({
                     c_out: iter.c_out,
                     c_in: iter.c_in,
                     row: iter.k_h,
                     col: iter.k_w
                 }),
-                getLinearIndex: (iter) => {
-                    return iter.c_out * (channels_in * kernelH * kernelW) +
-                           iter.c_in * (kernelH * kernelW) +
-                           iter.k_h * kernelW +
-                           iter.k_w;
+                getLinearIndex: (iter, layout) => {
+                    const o = iter.c_out;
+                    const i = iter.c_in;
+                    const h = iter.k_h;
+                    const w = iter.k_w;
+                    if (layout === 'HWIO') {
+                        // HWIO: h * (W * I * O) + w * (I * O) + i * O + o
+                        return h * (kernelW * channels_in * channels_out) +
+                               w * (channels_in * channels_out) +
+                               i * channels_out + o;
+                    }
+                    // OIHW (default): o * (I * H * W) + i * (H * W) + h * W + w
+                    return o * (channels_in * kernelH * kernelW) +
+                           i * (kernelH * kernelW) +
+                           h * kernelW + w;
                 }
             },
             {
@@ -227,15 +251,27 @@ function createConv2dOperation(config = {}) {
                 cols: outputW,
                 channels: channels_out,
                 is3D: true,
+                // Layout options for this tensor
+                layoutOptions: [
+                    { value: 'CHW', label: 'CHW' },
+                    { value: 'HWC', label: 'HWC' }
+                ],
                 // Output access: Output[c_out][h_out][w_out]
-                // Linear index: c_out * (H_out * W_out) + h_out * W_out + w_out
                 getIndices: (iter) => ({
                     channel: iter.c_out,
                     row: iter.h_out,
                     col: iter.w_out
                 }),
-                getLinearIndex: (iter) => {
-                    return iter.c_out * (outputH * outputW) + iter.h_out * outputW + iter.w_out;
+                getLinearIndex: (iter, layout) => {
+                    const c = iter.c_out;
+                    const h = iter.h_out;
+                    const w = iter.w_out;
+                    if (layout === 'HWC') {
+                        // HWC: h * (W * C) + w * C + c
+                        return h * (outputW * channels_out) + w * channels_out + c;
+                    }
+                    // CHW (default): c * (H * W) + h * W + w
+                    return c * (outputH * outputW) + h * outputW + w;
                 }
             }
         ],
@@ -471,7 +507,12 @@ function createTensorState(op) {
     const stats = {};
 
     for (const tensor of op.tensors) {
-        layouts[tensor.name] = 'row'; // default to row-major
+        // Use tensor-specific default layout if available, otherwise 'row'
+        if (tensor.layoutOptions && tensor.layoutOptions.length > 0) {
+            layouts[tensor.name] = tensor.layoutOptions[0].value;
+        } else {
+            layouts[tensor.name] = 'row';
+        }
         stats[tensor.name] = { accesses: 0, hits: 0 };
     }
 
@@ -741,7 +782,8 @@ function getTensorAddress(tensor, row, col, layout) {
 function getAccessAddress(tensor, iter) {
     // If tensor has custom linear index function, use it (for multi-dimensional tensors)
     if (tensor.getLinearIndex) {
-        const linearIndex = tensor.getLinearIndex(iter);
+        const layout = state.layouts[tensor.name];
+        const linearIndex = tensor.getLinearIndex(iter, layout);
         return tensor.baseAddress + linearIndex * operation.elementSize;
     }
 
@@ -776,12 +818,24 @@ function generateLayoutControls() {
     for (const tensor of operation.tensors) {
         const item = document.createElement('div');
         item.className = 'layout-item';
-        item.innerHTML = `
-            <span>${tensor.name}</span>
-            <select id="layout${tensor.name}">
+
+        // Use tensor-specific layout options if available
+        let optionsHTML;
+        if (tensor.layoutOptions && tensor.layoutOptions.length > 0) {
+            optionsHTML = tensor.layoutOptions
+                .map(opt => `<option value="${opt.value}">${opt.label}</option>`)
+                .join('');
+        } else {
+            // Default row/col options for matmul tensors
+            optionsHTML = `
                 <option value="row">Row-major</option>
                 <option value="col">Col-major</option>
-            </select>
+            `;
+        }
+
+        item.innerHTML = `
+            <span>${tensor.name}</span>
+            <select id="layout${tensor.name}">${optionsHTML}</select>
         `;
         container.appendChild(item);
     }
@@ -1263,8 +1317,17 @@ function isElementInCache2D(tensor, row, col) {
  * Check if element is in cache for 3D tensor.
  */
 function isElementInCache3D(tensor, channel, row, col) {
-    // Linear index for 3D: channel * (rows * cols) + row * cols + col
-    const linearIndex = channel * (tensor.rows * tensor.cols) + row * tensor.cols + col;
+    const layout = state.layouts[tensor.name];
+    let linearIndex;
+
+    if (layout === 'HWC') {
+        // HWC: row * (cols * channels) + col * channels + channel
+        linearIndex = row * (tensor.cols * tensor.channels) + col * tensor.channels + channel;
+    } else {
+        // CHW (default): channel * (rows * cols) + row * cols + col
+        linearIndex = channel * (tensor.rows * tensor.cols) + row * tensor.cols + col;
+    }
+
     const address = tensor.baseAddress + linearIndex * operation.elementSize;
     return state.cache.isAddressCached(address);
 }
@@ -1273,10 +1336,21 @@ function isElementInCache3D(tensor, channel, row, col) {
  * Check if element is in cache for 4D tensor (kernel).
  */
 function isElementInCache4D(tensor, c_out, c_in, row, col) {
-    // Linear index for 4D: c_out * (c_in * rows * cols) + c_in * (rows * cols) + row * cols + col
-    const linearIndex = c_out * (tensor.channels_in * tensor.rows * tensor.cols) +
-                        c_in * (tensor.rows * tensor.cols) +
-                        row * tensor.cols + col;
+    const layout = state.layouts[tensor.name];
+    let linearIndex;
+
+    if (layout === 'HWIO') {
+        // HWIO: row * (cols * c_in * c_out) + col * (c_in * c_out) + c_in * c_out + c_out
+        linearIndex = row * (tensor.cols * tensor.channels_in * tensor.channels_out) +
+                      col * (tensor.channels_in * tensor.channels_out) +
+                      c_in * tensor.channels_out + c_out;
+    } else {
+        // OIHW (default): c_out * (c_in * rows * cols) + c_in * (rows * cols) + row * cols + col
+        linearIndex = c_out * (tensor.channels_in * tensor.rows * tensor.cols) +
+                      c_in * (tensor.rows * tensor.cols) +
+                      row * tensor.cols + col;
+    }
+
     const address = tensor.baseAddress + linearIndex * operation.elementSize;
     return state.cache.isAddressCached(address);
 }
