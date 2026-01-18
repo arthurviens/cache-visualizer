@@ -657,17 +657,15 @@ function generateTiledIterations(op, loopOrder, tileSize) {
         }
     }
 
-    // Phase 3: Non-tiled dims after first tiled dim (between tile and element loops)
+    // Phase 3: Everything from first tiled dim onwards, maintaining relative order
+    // Tiled dims become element loops, non-tiled dims stay as simple loops
+    // This preserves the original loop semantics (e.g., for conv2d: h_out, w_out before c_in, k_h, k_w)
     for (let i = firstTiledIdx; i < order.length; i++) {
-        if (!tileableDims.has(order[i])) {
-            loopSpec.push({ dim: order[i], type: 'simple', bound: bounds[order[i]] });
-        }
-    }
-
-    // Phase 4: Element loops for all tiled dims (innermost)
-    for (const dim of order) {
+        const dim = order[i];
         if (tileableDims.has(dim)) {
             loopSpec.push({ dim: dim, type: 'element', tiledDim: dim, bound: bounds[dim], tileSize: tileSize });
+        } else {
+            loopSpec.push({ dim: dim, type: 'simple', bound: bounds[dim] });
         }
     }
 
@@ -1141,6 +1139,12 @@ function render3DTensor(ctx, tensor, currentIndices) {
         ctx.globalAlpha = 1.0;
     }
 
+    // Tile boundaries on front slice (c=0) when tiling is enabled
+    // Only show on Input tensor, not Output (Output tiles don't align nicely with dimensions)
+    if (state.tilingEnabled && state.tileSize > 1 && tensor.name !== 'Output') {
+        drawIsoTileBoundaries(ctx, rows, cols, baseX, baseY, state.tileSize);
+    }
+
     // Current slice highlight and access indicator (always on top with full opacity)
     if (currentIndices && currentIndices.channel !== undefined) {
         const c = currentIndices.channel;
@@ -1189,6 +1193,29 @@ function drawIsoGrid(ctx, rows, cols, xOffset, yOffset, alpha) {
         ctx.stroke();
     }
     ctx.globalAlpha = 1.0;
+}
+
+/**
+ * Draw tile boundaries for an isometric slice.
+ */
+function drawIsoTileBoundaries(ctx, rows, cols, xOffset, yOffset, tileSize) {
+    ctx.strokeStyle = COLORS.tileGrid;
+    ctx.lineWidth = 2;
+
+    // Vertical tile lines
+    for (let i = 0; i <= cols; i += tileSize) {
+        ctx.beginPath();
+        ctx.moveTo(xOffset + i * CELL_SIZE, yOffset);
+        ctx.lineTo(xOffset + i * CELL_SIZE, yOffset + rows * CELL_SIZE);
+        ctx.stroke();
+    }
+    // Horizontal tile lines
+    for (let i = 0; i <= rows; i += tileSize) {
+        ctx.beginPath();
+        ctx.moveTo(xOffset, yOffset + i * CELL_SIZE);
+        ctx.lineTo(xOffset + cols * CELL_SIZE, yOffset + i * CELL_SIZE);
+        ctx.stroke();
+    }
 }
 
 /**
@@ -2047,10 +2074,11 @@ function generateNonTiledCodeHTML(order) {
  * Supports partial tiling where only some dimensions are tiled.
  *
  * Loop structure matches generateTiledIterations:
- * 1. Non-tiled dims before first tiled dim
- * 2. Tile loops for tiled dims
- * 3. Non-tiled dims after first tiled dim
- * 4. Element loops for tiled dims
+ * 1. Non-tiled dims before first tiled dim (outer)
+ * 2. Tile loops for all tiled dims
+ * 3. Everything from first tiled dim onwards in original order:
+ *    - Tiled dims as element loops
+ *    - Non-tiled dims as simple loops
  */
 function generateTiledCodeHTML(order, tileSize) {
     const iter = state.iterations[state.currentIteration];
@@ -2103,41 +2131,38 @@ function generateTiledCodeHTML(order, tileSize) {
         }
     }
 
-    // Phase 3: Non-tiled dims after first tiled dim
+    // Phase 3: Everything from first tiled dim onwards, maintaining relative order
+    // Tiled dims become element loops, non-tiled dims stay as simple loops
     for (let i = firstTiledIdx; i < order.length; i++) {
         const dim = order[i];
-        if (!tileableDims.has(dim)) {
-            const bound = bounds[dim];
-            html += `<div class="code-line">`;
+        const bound = bounds[dim];
+        const isLastLoop = i === order.length - 1;
+        const isCurrent = isLastLoop && state.currentIteration < state.iterations.length;
+
+        if (tileableDims.has(dim)) {
+            // Element loop for tiled dimension
+            const tileVar = 't' + dim;
+            html += `<div class="code-line${isCurrent ? ' current' : ''}">`;
+            html += `${getIndent(indentLevel)}<span class="code-keyword">for</span> `;
+            html += `<span class="code-var">${dim}</span> `;
+            html += `<span class="code-keyword">in</span> `;
+            html += `<span class="code-var">${tileVar}</span>..<span class="code-var">${tileVar}</span>+<span class="code-number">${tileSize}</span>:`;
+            if (isCurrent && iter) {
+                html += ` <span class="code-comment">← ${dim}=${iter[dim]}</span>`;
+            }
+            html += '</div>';
+        } else {
+            // Simple loop for non-tiled dimension
+            html += `<div class="code-line${isCurrent ? ' current' : ''}">`;
             html += `${getIndent(indentLevel)}<span class="code-keyword">for</span> `;
             html += `<span class="code-var">${dim}</span> `;
             html += `<span class="code-keyword">in</span> `;
             html += `<span class="code-number">0</span>..<span class="code-number">${bound}</span>:`;
-            if (iter) {
+            if (isCurrent && iter) {
                 html += ` <span class="code-comment">← ${dim}=${iter[dim]}</span>`;
             }
             html += '</div>';
-            indentLevel++;
         }
-    }
-
-    // Phase 4: Element loops for tiled dims (innermost)
-    const tiledDimsInOrder = order.filter(d => tileableDims.has(d));
-    for (let i = 0; i < tiledDimsInOrder.length; i++) {
-        const dim = tiledDimsInOrder[i];
-        const tileVar = 't' + dim;
-        const isInnermost = i === tiledDimsInOrder.length - 1;
-        const isCurrent = isInnermost && state.currentIteration < state.iterations.length;
-
-        html += `<div class="code-line${isCurrent ? ' current' : ''}">`;
-        html += `${getIndent(indentLevel)}<span class="code-keyword">for</span> `;
-        html += `<span class="code-var">${dim}</span> `;
-        html += `<span class="code-keyword">in</span> `;
-        html += `<span class="code-var">${tileVar}</span>..<span class="code-var">${tileVar}</span>+<span class="code-number">${tileSize}</span>:`;
-        if (isCurrent && iter) {
-            html += ` <span class="code-comment">← ${dim}=${iter[dim]}</span>`;
-        }
-        html += '</div>';
         indentLevel++;
     }
 
