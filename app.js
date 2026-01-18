@@ -302,6 +302,163 @@ const COLORS = {
 };
 
 // =============================================================================
+// ISOMETRIC PROJECTION CONFIG
+// =============================================================================
+
+const ISO = {
+    // Offset per depth layer (how much each slice shifts)
+    depthOffsetX: 8,   // pixels to shift right per layer
+    depthOffsetY: -6,  // pixels to shift up per layer (negative = up)
+
+    // Transparency for stacked slices
+    sliceAlpha: 0.85,           // base alpha for slices
+    backSliceAlphaDrop: 0.08,   // additional alpha drop per layer back
+
+    // Minimum gap between slices (on top of offset)
+    sliceGap: 2
+};
+
+// =============================================================================
+// CELL DRAWING HELPERS
+// =============================================================================
+
+/**
+ * Draw a single cell with optional fill and border.
+ * This is the common drawing primitive for all tensor visualizations.
+ *
+ * @param {CanvasRenderingContext2D} ctx - Canvas context
+ * @param {number} x - Screen X position
+ * @param {number} y - Screen Y position
+ * @param {number} width - Cell width
+ * @param {number} height - Cell height
+ * @param {Object} options - Drawing options
+ */
+function drawCell(ctx, x, y, width, height, options = {}) {
+    const {
+        fillColor = null,
+        strokeColor = null,
+        lineWidth = 1,
+        alpha = 1.0
+    } = options;
+
+    const prevAlpha = ctx.globalAlpha;
+    ctx.globalAlpha = alpha;
+
+    if (fillColor) {
+        ctx.fillStyle = fillColor;
+        ctx.fillRect(x, y, width, height);
+    }
+
+    if (strokeColor) {
+        ctx.strokeStyle = strokeColor;
+        ctx.lineWidth = lineWidth;
+        ctx.strokeRect(x, y, width, height);
+    }
+
+    ctx.globalAlpha = prevAlpha;
+}
+
+/**
+ * Draw a filled cell for cached element.
+ */
+function drawCachedCell(ctx, x, y, alpha = 1.0) {
+    drawCell(ctx, x, y, CELL_SIZE, CELL_SIZE, {
+        fillColor: COLORS.cached,
+        alpha: alpha
+    });
+}
+
+/**
+ * Draw current access indicator.
+ */
+function drawCurrentAccessCell(ctx, x, y, alpha = 1.0) {
+    const prevAlpha = ctx.globalAlpha;
+    ctx.globalAlpha = alpha;
+
+    // Inner fill
+    ctx.fillStyle = COLORS.current;
+    ctx.fillRect(x + 3, y + 3, CELL_SIZE - 6, CELL_SIZE - 6);
+
+    // Outer stroke
+    ctx.strokeStyle = COLORS.currentOutline;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x + 1, y + 1, CELL_SIZE - 2, CELL_SIZE - 2);
+
+    ctx.globalAlpha = prevAlpha;
+}
+
+/**
+ * Draw a parallelogram (for isometric slice background/border).
+ * Points are defined clockwise from top-left.
+ *
+ * @param {CanvasRenderingContext2D} ctx - Canvas context
+ * @param {Array} points - Array of {x, y} points (4 corners)
+ * @param {Object} options - Drawing options (fillColor, strokeColor, lineWidth, alpha)
+ */
+function drawParallelogram(ctx, points, options = {}) {
+    const {
+        fillColor = null,
+        strokeColor = null,
+        lineWidth = 1,
+        alpha = 1.0
+    } = options;
+
+    const prevAlpha = ctx.globalAlpha;
+    ctx.globalAlpha = alpha;
+
+    ctx.beginPath();
+    ctx.moveTo(points[0].x, points[0].y);
+    for (let i = 1; i < points.length; i++) {
+        ctx.lineTo(points[i].x, points[i].y);
+    }
+    ctx.closePath();
+
+    if (fillColor) {
+        ctx.fillStyle = fillColor;
+        ctx.fill();
+    }
+
+    if (strokeColor) {
+        ctx.strokeStyle = strokeColor;
+        ctx.lineWidth = lineWidth;
+        ctx.stroke();
+    }
+
+    ctx.globalAlpha = prevAlpha;
+}
+
+/**
+ * Calculate screen position for a cell in an isometric slice.
+ *
+ * @param {number} row - Row in the 2D slice
+ * @param {number} col - Column in the 2D slice
+ * @param {number} depth - Depth layer (0 = front, higher = back)
+ * @param {number} baseX - Base X offset for this tensor
+ * @param {number} baseY - Base Y offset for this tensor
+ * @returns {{x: number, y: number}} Screen coordinates
+ */
+function isoPosition(row, col, depth, baseX, baseY) {
+    return {
+        x: baseX + col * CELL_SIZE + depth * ISO.depthOffsetX,
+        y: baseY + row * CELL_SIZE + depth * ISO.depthOffsetY
+    };
+}
+
+/**
+ * Calculate alpha for a slice at given depth.
+ * Front slices (depth=0) are most opaque, back slices fade slightly.
+ *
+ * @param {number} depth - Depth layer (0 = front)
+ * @param {number} totalDepth - Total number of layers
+ * @returns {number} Alpha value (0-1)
+ */
+function isoAlpha(depth, totalDepth) {
+    // Invert: we draw back-to-front, so depth 0 in drawing order is actually the back
+    const distanceFromFront = totalDepth - 1 - depth;
+    return Math.max(0.4, ISO.sliceAlpha - distanceFromFront * ISO.backSliceAlphaDrop);
+}
+
+// =============================================================================
 // APPLICATION STATE
 // =============================================================================
 
@@ -643,17 +800,37 @@ function getTensorCanvasSize(tensor) {
     const cols = tensor.cols;
 
     if (tensor.is4D) {
-        // 4D tensor (kernel): show as grid of c_out × c_in small kernels
+        // 4D tensor (kernel): show as rows of isometric 3D stacks
+        // Each row is one c_out value, showing c_in channels stacked
         const c_out = tensor.channels_out;
         const c_in = tensor.channels_in;
-        const width = c_in * cols * CELL_SIZE + (c_in - 1) * CHANNEL_GAP;
-        const height = c_out * rows * CELL_SIZE + (c_out - 1) * CHANNEL_GAP;
+
+        // Width: base grid + isometric depth offset for all channels
+        const baseWidth = cols * CELL_SIZE;
+        const depthWidth = (c_in - 1) * ISO.depthOffsetX;
+        const width = baseWidth + depthWidth + 20;  // padding
+
+        // Height: rows of 3D stacks with gaps + isometric vertical offset
+        const baseHeight = rows * CELL_SIZE;
+        const depthHeight = Math.abs((c_in - 1) * ISO.depthOffsetY);
+        const rowHeight = baseHeight + depthHeight + CHANNEL_GAP;
+        const height = c_out * rowHeight + 20;  // padding
+
         return { width, height };
     } else if (tensor.is3D) {
-        // 3D tensor: show channels side-by-side horizontally
+        // 3D tensor: isometric stacked slices
         const channels = tensor.channels;
-        const width = channels * cols * CELL_SIZE + (channels - 1) * CHANNEL_GAP;
-        const height = rows * CELL_SIZE;
+
+        // Width: base grid + isometric depth offset for all channels
+        const baseWidth = cols * CELL_SIZE;
+        const depthWidth = (channels - 1) * ISO.depthOffsetX;
+        const width = baseWidth + depthWidth + 20;  // padding for labels
+
+        // Height: base grid + isometric vertical offset (goes upward)
+        const baseHeight = rows * CELL_SIZE;
+        const depthHeight = Math.abs((channels - 1) * ISO.depthOffsetY);
+        const height = baseHeight + depthHeight + 20;  // padding for labels
+
         return { width, height };
     } else {
         // 2D tensor (matmul): square
@@ -816,87 +993,172 @@ function render3DTensor(ctx, tensor, currentIndices) {
     const cols = tensor.cols;
     const channels = tensor.channels;
 
-    for (let c = 0; c < channels; c++) {
-        const xOffset = c * (cols * CELL_SIZE + CHANNEL_GAP);
+    // Base position accounting for isometric offset (front slice at bottom-left)
+    const baseX = 5;
+    const baseY = Math.abs((channels - 1) * ISO.depthOffsetY) + 5;
+
+    // Draw back-to-front for proper layering
+    for (let c = channels - 1; c >= 0; c--) {
+        const depth = channels - 1 - c;  // depth 0 = back slice
+        const alpha = isoAlpha(depth, channels);
+
+        // Calculate slice offset from base position
+        const sliceOffsetX = c * ISO.depthOffsetX;
+        const sliceOffsetY = c * ISO.depthOffsetY;
+
+        // Draw slice background (subtle fill to show slice boundary)
+        const sliceCorners = [
+            { x: baseX + sliceOffsetX, y: baseY + sliceOffsetY },
+            { x: baseX + sliceOffsetX + cols * CELL_SIZE, y: baseY + sliceOffsetY },
+            { x: baseX + sliceOffsetX + cols * CELL_SIZE, y: baseY + sliceOffsetY + rows * CELL_SIZE },
+            { x: baseX + sliceOffsetX, y: baseY + sliceOffsetY + rows * CELL_SIZE }
+        ];
+        drawParallelogram(ctx, sliceCorners, {
+            fillColor: '#f8f8f8',
+            strokeColor: COLORS.grid,
+            lineWidth: 1,
+            alpha: alpha
+        });
 
         // Cached elements for this channel
         if (state.cache) {
             for (let row = 0; row < rows; row++) {
                 for (let col = 0; col < cols; col++) {
                     if (isElementInCache3D(tensor, c, row, col)) {
-                        ctx.fillStyle = COLORS.cached;
-                        ctx.fillRect(xOffset + col * CELL_SIZE, row * CELL_SIZE, CELL_SIZE, CELL_SIZE);
+                        const pos = isoPosition(row, col, c, baseX, baseY);
+                        drawCachedCell(ctx, pos.x, pos.y, alpha);
                     }
                 }
             }
         }
 
         // Grid lines for this channel
-        drawGrid(ctx, rows, cols, xOffset, 0);
+        drawIsoGrid(ctx, rows, cols, baseX + sliceOffsetX, baseY + sliceOffsetY, alpha);
 
-        // Channel label
+        // Channel label (on front edge of slice)
+        ctx.globalAlpha = alpha;
         ctx.fillStyle = '#666';
-        ctx.font = '10px sans-serif';
-        ctx.fillText(`c${c}`, xOffset + 2, rows * CELL_SIZE + 12);
+        ctx.font = '9px sans-serif';
+        ctx.fillText(`c${c}`, baseX + sliceOffsetX + 2, baseY + sliceOffsetY + rows * CELL_SIZE + 10);
+        ctx.globalAlpha = 1.0;
     }
 
-    // Current access indicator
+    // Current access indicator (always on top with full opacity)
     if (currentIndices && currentIndices.channel !== undefined) {
-        const xOffset = currentIndices.channel * (cols * CELL_SIZE + CHANNEL_GAP);
-        drawCurrentAccess(ctx, currentIndices.row, currentIndices.col, xOffset, 0);
+        const c = currentIndices.channel;
+        const pos = isoPosition(currentIndices.row, currentIndices.col, c, baseX, baseY);
+        drawCurrentAccessCell(ctx, pos.x, pos.y, 1.0);
     }
 }
 
 /**
- * Render a 4D tensor (kernel: c_out × c_in grid of small kernels).
+ * Draw grid lines for an isometric slice.
+ */
+function drawIsoGrid(ctx, rows, cols, xOffset, yOffset, alpha) {
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = COLORS.grid;
+    ctx.lineWidth = 1;
+
+    // Vertical lines
+    for (let i = 0; i <= cols; i++) {
+        ctx.beginPath();
+        ctx.moveTo(xOffset + i * CELL_SIZE, yOffset);
+        ctx.lineTo(xOffset + i * CELL_SIZE, yOffset + rows * CELL_SIZE);
+        ctx.stroke();
+    }
+    // Horizontal lines
+    for (let i = 0; i <= rows; i++) {
+        ctx.beginPath();
+        ctx.moveTo(xOffset, yOffset + i * CELL_SIZE);
+        ctx.lineTo(xOffset + cols * CELL_SIZE, yOffset + i * CELL_SIZE);
+        ctx.stroke();
+    }
+    ctx.globalAlpha = 1.0;
+}
+
+/**
+ * Render a 4D tensor (kernel) as rows of isometric 3D stacks.
+ * Each row represents one c_out value, with c_in slices stacked isometrically.
  */
 function render4DTensor(ctx, tensor, currentIndices) {
-    const rows = tensor.rows;  // kernel height
-    const cols = tensor.cols;  // kernel width
+    const kRows = tensor.rows;  // kernel height
+    const kCols = tensor.cols;  // kernel width
     const c_in = tensor.channels_in;
     const c_out = tensor.channels_out;
 
+    // Calculate row height including isometric depth offset
+    const baseHeight = kRows * CELL_SIZE;
+    const depthHeight = Math.abs((c_in - 1) * ISO.depthOffsetY);
+    const rowHeight = baseHeight + depthHeight + CHANNEL_GAP + 5;
+
+    // Base position
+    const baseX = 25;  // room for co labels
+
     for (let co = 0; co < c_out; co++) {
-        for (let ci = 0; ci < c_in; ci++) {
-            const xOffset = ci * (cols * CELL_SIZE + CHANNEL_GAP);
-            const yOffset = co * (rows * CELL_SIZE + CHANNEL_GAP);
+        // Y position for this output channel row
+        const rowBaseY = 10 + co * rowHeight + depthHeight;
+
+        // c_out label for this row
+        ctx.fillStyle = '#666';
+        ctx.font = '9px sans-serif';
+        ctx.fillText(`co${co}`, 2, rowBaseY + kRows * CELL_SIZE / 2 + 3);
+
+        // Draw c_in slices back-to-front for this output channel
+        for (let ci = c_in - 1; ci >= 0; ci--) {
+            const depth = c_in - 1 - ci;  // depth 0 = back slice
+            const alpha = isoAlpha(depth, c_in);
+
+            // Slice offset from isometric projection
+            const sliceOffsetX = ci * ISO.depthOffsetX;
+            const sliceOffsetY = ci * ISO.depthOffsetY;
+
+            const sliceX = baseX + sliceOffsetX;
+            const sliceY = rowBaseY + sliceOffsetY;
+
+            // Draw slice background
+            const sliceCorners = [
+                { x: sliceX, y: sliceY },
+                { x: sliceX + kCols * CELL_SIZE, y: sliceY },
+                { x: sliceX + kCols * CELL_SIZE, y: sliceY + kRows * CELL_SIZE },
+                { x: sliceX, y: sliceY + kRows * CELL_SIZE }
+            ];
+            drawParallelogram(ctx, sliceCorners, {
+                fillColor: '#f8f8f8',
+                strokeColor: COLORS.grid,
+                lineWidth: 1,
+                alpha: alpha
+            });
 
             // Cached elements for this kernel slice
             if (state.cache) {
-                for (let row = 0; row < rows; row++) {
-                    for (let col = 0; col < cols; col++) {
+                for (let row = 0; row < kRows; row++) {
+                    for (let col = 0; col < kCols; col++) {
                         if (isElementInCache4D(tensor, co, ci, row, col)) {
-                            ctx.fillStyle = COLORS.cached;
-                            ctx.fillRect(xOffset + col * CELL_SIZE, yOffset + row * CELL_SIZE, CELL_SIZE, CELL_SIZE);
+                            const cellX = sliceX + col * CELL_SIZE;
+                            const cellY = sliceY + row * CELL_SIZE;
+                            drawCachedCell(ctx, cellX, cellY, alpha);
                         }
                     }
                 }
             }
 
             // Grid lines for this kernel slice
-            drawGrid(ctx, rows, cols, xOffset, yOffset);
+            drawIsoGrid(ctx, kRows, kCols, sliceX, sliceY, alpha);
         }
     }
 
-    // Axis labels
-    ctx.fillStyle = '#666';
-    ctx.font = '10px sans-serif';
-    // c_in labels (top)
-    for (let ci = 0; ci < c_in; ci++) {
-        const xOffset = ci * (cols * CELL_SIZE + CHANNEL_GAP);
-        ctx.fillText(`ci${ci}`, xOffset + 2, -2);
-    }
-    // c_out labels (left)
-    for (let co = 0; co < c_out; co++) {
-        const yOffset = co * (rows * CELL_SIZE + CHANNEL_GAP);
-        ctx.fillText(`co${co}`, -20, yOffset + rows * CELL_SIZE / 2 + 4);
-    }
-
-    // Current access indicator
+    // Current access indicator (always on top with full opacity)
     if (currentIndices && currentIndices.c_out !== undefined) {
-        const xOffset = currentIndices.c_in * (cols * CELL_SIZE + CHANNEL_GAP);
-        const yOffset = currentIndices.c_out * (rows * CELL_SIZE + CHANNEL_GAP);
-        drawCurrentAccess(ctx, currentIndices.row, currentIndices.col, xOffset, yOffset);
+        const co = currentIndices.c_out;
+        const ci = currentIndices.c_in;
+        const rowBaseY = 10 + co * rowHeight + depthHeight;
+
+        const sliceX = baseX + ci * ISO.depthOffsetX;
+        const sliceY = rowBaseY + ci * ISO.depthOffsetY;
+        const cellX = sliceX + currentIndices.col * CELL_SIZE;
+        const cellY = sliceY + currentIndices.row * CELL_SIZE;
+
+        drawCurrentAccessCell(ctx, cellX, cellY, 1.0);
     }
 }
 
