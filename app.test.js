@@ -535,25 +535,52 @@ describe('Conv2D Iteration Generator', () => {
         assert.strictEqual(seen.size, op.getTotalIterations());
     });
 
-    it('tiled iteration has correct tile indices', () => {
+    it('tiled iteration has correct tile indices for tileable dims only', () => {
+        // Conv2d only tiles h_out and w_out (not c_out, c_in, k_h, k_w)
         const iters = generateTiledIterations(op, 'c_out,h_out,w_out,c_in,k_h,k_w', 2);
         for (const iter of iters) {
-            // Tile indices should be multiples of tile size
-            assert.strictEqual(iter.tc_out % 2, 0, `tc_out=${iter.tc_out}`);
+            // Only h_out and w_out should have tile indices
             assert.strictEqual(iter.th_out % 2, 0, `th_out=${iter.th_out}`);
             assert.strictEqual(iter.tw_out % 2, 0, `tw_out=${iter.tw_out}`);
-            assert.strictEqual(iter.tc_in % 2, 0, `tc_in=${iter.tc_in}`);
-            assert.strictEqual(iter.tk_h % 2, 0, `tk_h=${iter.tk_h}`);
-            assert.strictEqual(iter.tk_w % 2, 0, `tk_w=${iter.tk_w}`);
 
-            // Element indices should be within tile
-            assert.ok(iter.c_out >= iter.tc_out && iter.c_out < iter.tc_out + 2);
-            assert.ok(iter.h_out >= iter.th_out && iter.h_out < iter.th_out + 2);
-            assert.ok(iter.w_out >= iter.tw_out && iter.w_out < iter.tw_out + 2);
-            assert.ok(iter.c_in >= iter.tc_in && iter.c_in < iter.tc_in + 2);
-            assert.ok(iter.k_h >= iter.tk_h && iter.k_h < iter.tk_h + 2);
-            assert.ok(iter.k_w >= iter.tk_w && iter.k_w < iter.tk_w + 2);
+            // Element indices for tiled dims should be within tile
+            assert.ok(iter.h_out >= iter.th_out && iter.h_out < iter.th_out + 2,
+                `h_out=${iter.h_out} not in tile [${iter.th_out}, ${iter.th_out + 2})`);
+            assert.ok(iter.w_out >= iter.tw_out && iter.w_out < iter.tw_out + 2,
+                `w_out=${iter.w_out} not in tile [${iter.tw_out}, ${iter.tw_out + 2})`);
+
+            // Non-tiled dimensions should NOT have tile indices
+            assert.strictEqual(iter.tc_out, undefined, 'c_out should not be tiled');
+            assert.strictEqual(iter.tc_in, undefined, 'c_in should not be tiled');
+            assert.strictEqual(iter.tk_h, undefined, 'k_h should not be tiled');
+            assert.strictEqual(iter.tk_w, undefined, 'k_w should not be tiled');
+
+            // Non-tiled dimensions should still have their regular indices
+            assert.ok(iter.c_out >= 0 && iter.c_out < op.loopBounds.c_out);
+            assert.ok(iter.c_in >= 0 && iter.c_in < op.loopBounds.c_in);
+            assert.ok(iter.k_h >= 0 && iter.k_h < op.loopBounds.k_h);
+            assert.ok(iter.k_w >= 0 && iter.k_w < op.loopBounds.k_w);
         }
+    });
+
+    it('partial tiling: c_out varies before tile loops', () => {
+        // Loop order: c_out, h_out, w_out, c_in, k_h, k_w
+        // With partial tiling (h_out, w_out only), structure should be:
+        //   c_out (outer non-tiled) → th_out → tw_out → c_in, k_h, k_w (inner non-tiled) → h_out, w_out (element)
+        const iters = generateTiledIterations(op, 'c_out,h_out,w_out,c_in,k_h,k_w', 2);
+
+        // Find where c_out changes from 0 to 1
+        // It should only change when we've exhausted all tile/element combinations for c_out=0
+        let firstC1Index = iters.findIndex(it => it.c_out === 1);
+
+        // All iterations before firstC1Index should have c_out=0
+        for (let i = 0; i < firstC1Index; i++) {
+            assert.strictEqual(iters[i].c_out, 0, `iter ${i} should have c_out=0`);
+        }
+
+        // The first iteration with c_out=1 should restart tile loops from the beginning
+        assert.strictEqual(iters[firstC1Index].th_out, 0, 'th_out should reset to 0 for c_out=1');
+        assert.strictEqual(iters[firstC1Index].tw_out, 0, 'tw_out should reset to 0 for c_out=1');
     });
 });
 

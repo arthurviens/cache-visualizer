@@ -92,7 +92,11 @@ function createMatmulOperation(size, elementSize) {
         getTotalIterations: () => size * size * size,
 
         // Operators displayed between tensors in visualization (length = tensors.length - 1)
-        tensorOperators: ['×', '=']
+        tensorOperators: ['×', '='],
+
+        // Tiling configuration
+        tileableDims: ['i', 'j', 'k'],  // All dimensions can be tiled
+        tileSizes: [2, 4, 6]            // Available tile sizes
     };
 }
 
@@ -290,7 +294,11 @@ function createConv2dOperation(config = {}) {
         getTotalIterations: () => channels_out * outputH * outputW * channels_in * kernelH * kernelW,
 
         // Operators displayed between tensors
-        tensorOperators: ['*', '=']
+        tensorOperators: ['*', '='],
+
+        // Tiling configuration - only spatial dimensions are tiled
+        tileableDims: ['h_out', 'w_out'],  // Only tile output spatial dimensions
+        tileSizes: [2, 4]                   // 2x2 or 4x4 tiles (output is 6x6)
     };
 }
 
@@ -603,6 +611,13 @@ function generateIterations(op, loopOrder) {
 
 /**
  * Generate iteration sequence for tiled execution.
+ * Supports partial tiling where only some dimensions are tiled.
+ *
+ * Loop structure for partial tiling:
+ * 1. Non-tiled dims before first tiled dim (outer loops)
+ * 2. Tile loops for all tiled dims
+ * 3. Non-tiled dims after first tiled dim (between tile and element loops)
+ * 4. Element loops for all tiled dims (innermost)
  *
  * @param {Object} op - Operation definition
  * @param {string} loopOrder - Loop nesting order
@@ -610,7 +625,6 @@ function generateIterations(op, loopOrder) {
  * @returns {Array} Sequence of index objects with tile info
  */
 function generateTiledIterations(op, loopOrder, tileSize) {
-    const iterations = [];
     const order = op.loopOrders[loopOrder];
 
     if (!order) {
@@ -618,57 +632,86 @@ function generateTiledIterations(op, loopOrder, tileSize) {
     }
 
     const bounds = op.loopBounds;
+    const tileableDims = new Set(op.tileableDims || op.loopDims);  // Default: all dims tileable
 
-    // Calculate number of tiles per dimension
-    const numTiles = {};
+    // Find first tiled dimension in the loop order
+    const firstTiledIdx = order.findIndex(d => tileableDims.has(d));
+    if (firstTiledIdx === -1) {
+        // No tileable dimensions - fall back to regular iteration
+        return generateIterations(op, loopOrder);
+    }
+
+    // Build loop specification
+    // Each entry: { dim, type: 'simple'|'tile'|'element', ... }
+    const loopSpec = [];
+
+    // Phase 1: Non-tiled dims before first tiled dim (stay as outer loops)
+    for (let i = 0; i < firstTiledIdx; i++) {
+        loopSpec.push({ dim: order[i], type: 'simple', bound: bounds[order[i]] });
+    }
+
+    // Phase 2: Tile loops for all tiled dims (in their order of appearance)
     for (const dim of order) {
-        numTiles[dim] = Math.ceil(bounds[dim] / tileSize);
-    }
-
-    // Recursive helper for outer tile loops
-    function nestTileLoops(depth, tileIndices) {
-        if (depth === order.length) {
-            // All tile indices set, now iterate within the tile
-            nestElementLoops(0, tileIndices, {});
-            return;
-        }
-
-        const dim = order[depth];
-        const tiles = numTiles[dim];
-        for (let t = 0; t < tiles; t++) {
-            tileIndices['t' + dim] = t * tileSize;
-            nestTileLoops(depth + 1, tileIndices);
+        if (tileableDims.has(dim)) {
+            loopSpec.push({ dim: 't' + dim, type: 'tile', tiledDim: dim, bound: bounds[dim], step: tileSize });
         }
     }
 
-    // Recursive helper for inner element loops within a tile
-    function nestElementLoops(depth, tileIndices, elemIndices) {
-        if (depth === order.length) {
+    // Phase 3: Non-tiled dims after first tiled dim (between tile and element loops)
+    for (let i = firstTiledIdx; i < order.length; i++) {
+        if (!tileableDims.has(order[i])) {
+            loopSpec.push({ dim: order[i], type: 'simple', bound: bounds[order[i]] });
+        }
+    }
+
+    // Phase 4: Element loops for all tiled dims (innermost)
+    for (const dim of order) {
+        if (tileableDims.has(dim)) {
+            loopSpec.push({ dim: dim, type: 'element', tiledDim: dim, bound: bounds[dim], tileSize: tileSize });
+        }
+    }
+
+    // Generate iterations using the loop spec
+    const iterations = [];
+
+    function nest(depth, currentIndices) {
+        if (depth === loopSpec.length) {
             // Leaf: create iteration object
             const iter = {};
             for (const dim of op.loopDims) {
-                const tileBase = tileIndices['t' + dim];
-                const local = elemIndices[dim];
-                iter[dim] = tileBase + local;
-                iter['t' + dim] = tileBase;  // tile base
-                iter['l' + dim] = local;     // local offset within tile
+                iter[dim] = currentIndices[dim];
+                if (tileableDims.has(dim)) {
+                    iter['t' + dim] = currentIndices['t' + dim];
+                    iter['l' + dim] = currentIndices[dim] - currentIndices['t' + dim];
+                }
             }
             iterations.push(iter);
             return;
         }
 
-        const dim = order[depth];
-        const tileBase = tileIndices['t' + dim];
-        const bound = bounds[dim];
-        // Element loop within tile (clamped to actual bounds)
-        const tileEnd = Math.min(tileBase + tileSize, bound);
-        for (let e = 0; e < tileEnd - tileBase; e++) {
-            elemIndices[dim] = e;
-            nestElementLoops(depth + 1, tileIndices, elemIndices);
+        const spec = loopSpec[depth];
+
+        if (spec.type === 'simple') {
+            for (let v = 0; v < spec.bound; v++) {
+                currentIndices[spec.dim] = v;
+                nest(depth + 1, currentIndices);
+            }
+        } else if (spec.type === 'tile') {
+            for (let t = 0; t < spec.bound; t += spec.step) {
+                currentIndices[spec.dim] = t;
+                nest(depth + 1, currentIndices);
+            }
+        } else if (spec.type === 'element') {
+            const tileBase = currentIndices['t' + spec.tiledDim];
+            const tileEnd = Math.min(tileBase + spec.tileSize, spec.bound);
+            for (let e = tileBase; e < tileEnd; e++) {
+                currentIndices[spec.dim] = e;
+                nest(depth + 1, currentIndices);
+            }
         }
     }
 
-    nestTileLoops(0, {});
+    nest(0, {});
     return iterations;
 }
 
@@ -1578,9 +1621,15 @@ function updateStateDisplay() {
     if (iter) {
         // Build indices string
         let indicesStr = '';
-        if (state.tilingEnabled && iter.ti !== undefined) {
-            // Show tile indices first, then element indices
-            const tileParts = operation.loopDims.map(d => `t${d}=${iter['t' + d]}`);
+        const tileableDims = new Set(operation.tileableDims || operation.loopDims);
+        const hasTileInfo = state.tilingEnabled && operation.tileableDims &&
+                           iter['t' + operation.tileableDims[0]] !== undefined;
+
+        if (hasTileInfo) {
+            // Show tile indices for tiled dims, then all element indices
+            const tileParts = operation.loopDims
+                .filter(d => tileableDims.has(d))
+                .map(d => `t${d}=${iter['t' + d]}`);
             const elemParts = operation.loopDims.map(d => `${d}=${iter[d]}`);
             indicesStr = tileParts.join(', ') + ', ' + elemParts.join(', ');
         } else {
@@ -1826,6 +1875,7 @@ function switchMode(mode) {
     // Regenerate dynamic UI elements
     generateTensorUI();
     generateLoopOrderOptions();
+    generateTileSizeOptions();
 
     // Reinitialize canvases
     initCanvases();
@@ -1854,6 +1904,38 @@ function generateLoopOrderOptions() {
         option.value = key;
         option.textContent = order.join(' → ');
         select.appendChild(option);
+    }
+}
+
+/**
+ * Generate tile size dropdown options based on current operation.
+ */
+function generateTileSizeOptions() {
+    const select = document.getElementById('tileSize');
+    const currentValue = parseInt(select.value);
+    select.innerHTML = '';
+
+    const tileSizes = operation.tileSizes || [2, 4, 6];
+    const tileableDims = operation.tileableDims || operation.loopDims;
+
+    for (const size of tileSizes) {
+        const option = document.createElement('option');
+        option.value = size;
+        // Show which dimensions are tiled
+        if (tileableDims.length < operation.loopDims.length) {
+            // Partial tiling - show tiled dimensions
+            option.textContent = `${size}×${size} (${tileableDims.join(', ')})`;
+        } else {
+            option.textContent = `${size}×${size}`;
+        }
+        select.appendChild(option);
+    }
+
+    // Try to preserve current selection, otherwise use first available
+    if (tileSizes.includes(currentValue)) {
+        select.value = currentValue;
+    } else {
+        select.value = tileSizes[0];
     }
 }
 
@@ -1962,52 +2044,104 @@ function generateNonTiledCodeHTML(order) {
 
 /**
  * Generate HTML for tiled loop code.
+ * Supports partial tiling where only some dimensions are tiled.
+ *
+ * Loop structure matches generateTiledIterations:
+ * 1. Non-tiled dims before first tiled dim
+ * 2. Tile loops for tiled dims
+ * 3. Non-tiled dims after first tiled dim
+ * 4. Element loops for tiled dims
  */
 function generateTiledCodeHTML(order, tileSize) {
     const iter = state.iterations[state.currentIteration];
     const bounds = operation.loopBounds;
-    const numLoops = order.length;
+    const tileableDims = new Set(operation.tileableDims || operation.loopDims);
     let html = '';
+    let indentLevel = 0;
 
-    // Generate indentation dynamically for any number of loops
     const getIndent = (level) => '  '.repeat(level);
 
-    // Tile loops
-    for (let level = 0; level < numLoops; level++) {
-        const dimName = order[level];
-        const varName = 't' + dimName;
-        const bound = bounds[dimName];
-        html += `<div class="code-line">`;
-        html += `${getIndent(level)}<span class="code-keyword">for</span> `;
-        html += `<span class="code-var">${varName}</span> `;
-        html += `<span class="code-keyword">in</span> `;
-        html += `<span class="code-number">0</span>..<span class="code-number">${bound}</span> `;
-        html += `<span class="code-keyword">step</span> <span class="code-number">${tileSize}</span>:`;
-        if (iter && iter[varName] !== undefined) {
-            html += ` <span class="code-comment">← ${varName}=${iter[varName]}</span>`;
-        }
-        html += '</div>';
+    // Find first tiled dimension
+    const firstTiledIdx = order.findIndex(d => tileableDims.has(d));
+    if (firstTiledIdx === -1) {
+        // No tileable dims - show as non-tiled
+        return generateNonTiledCodeHTML(order);
     }
 
-    // Inner element loops
-    for (let level = 0; level < numLoops; level++) {
-        const varName = order[level];
-        const tileVar = 't' + varName;
-        const isInnermost = level === numLoops - 1;
+    // Phase 1: Non-tiled dims before first tiled dim
+    for (let i = 0; i < firstTiledIdx; i++) {
+        const dim = order[i];
+        const bound = bounds[dim];
+        html += `<div class="code-line">`;
+        html += `${getIndent(indentLevel)}<span class="code-keyword">for</span> `;
+        html += `<span class="code-var">${dim}</span> `;
+        html += `<span class="code-keyword">in</span> `;
+        html += `<span class="code-number">0</span>..<span class="code-number">${bound}</span>:`;
+        if (iter) {
+            html += ` <span class="code-comment">← ${dim}=${iter[dim]}</span>`;
+        }
+        html += '</div>';
+        indentLevel++;
+    }
+
+    // Phase 2: Tile loops for tiled dims (in their order of appearance)
+    for (const dim of order) {
+        if (tileableDims.has(dim)) {
+            const varName = 't' + dim;
+            const bound = bounds[dim];
+            html += `<div class="code-line">`;
+            html += `${getIndent(indentLevel)}<span class="code-keyword">for</span> `;
+            html += `<span class="code-var">${varName}</span> `;
+            html += `<span class="code-keyword">in</span> `;
+            html += `<span class="code-number">0</span>..<span class="code-number">${bound}</span> `;
+            html += `<span class="code-keyword">step</span> <span class="code-number">${tileSize}</span>:`;
+            if (iter && iter[varName] !== undefined) {
+                html += ` <span class="code-comment">← ${varName}=${iter[varName]}</span>`;
+            }
+            html += '</div>';
+            indentLevel++;
+        }
+    }
+
+    // Phase 3: Non-tiled dims after first tiled dim
+    for (let i = firstTiledIdx; i < order.length; i++) {
+        const dim = order[i];
+        if (!tileableDims.has(dim)) {
+            const bound = bounds[dim];
+            html += `<div class="code-line">`;
+            html += `${getIndent(indentLevel)}<span class="code-keyword">for</span> `;
+            html += `<span class="code-var">${dim}</span> `;
+            html += `<span class="code-keyword">in</span> `;
+            html += `<span class="code-number">0</span>..<span class="code-number">${bound}</span>:`;
+            if (iter) {
+                html += ` <span class="code-comment">← ${dim}=${iter[dim]}</span>`;
+            }
+            html += '</div>';
+            indentLevel++;
+        }
+    }
+
+    // Phase 4: Element loops for tiled dims (innermost)
+    const tiledDimsInOrder = order.filter(d => tileableDims.has(d));
+    for (let i = 0; i < tiledDimsInOrder.length; i++) {
+        const dim = tiledDimsInOrder[i];
+        const tileVar = 't' + dim;
+        const isInnermost = i === tiledDimsInOrder.length - 1;
         const isCurrent = isInnermost && state.currentIteration < state.iterations.length;
 
         html += `<div class="code-line${isCurrent ? ' current' : ''}">`;
-        html += `${getIndent(level + numLoops)}<span class="code-keyword">for</span> `;
-        html += `<span class="code-var">${varName}</span> `;
+        html += `${getIndent(indentLevel)}<span class="code-keyword">for</span> `;
+        html += `<span class="code-var">${dim}</span> `;
         html += `<span class="code-keyword">in</span> `;
         html += `<span class="code-var">${tileVar}</span>..<span class="code-var">${tileVar}</span>+<span class="code-number">${tileSize}</span>:`;
         if (isCurrent && iter) {
-            html += ` <span class="code-comment">← ${varName}=${iter[varName]}</span>`;
+            html += ` <span class="code-comment">← ${dim}=${iter[dim]}</span>`;
         }
         html += '</div>';
+        indentLevel++;
     }
 
-    html += `<div class="code-line">${getIndent(2 * numLoops)}${operation.codeTemplate}</div>`;
+    html += `<div class="code-line">${getIndent(indentLevel)}${operation.codeTemplate}</div>`;
     return html;
 }
 
@@ -2371,6 +2505,7 @@ function init() {
     // Generate dynamic UI elements from operation definition
     generateTensorUI();
     generateLoopOrderOptions();
+    generateTileSizeOptions();
 
     initCanvases();
     setupEventHandlers();
