@@ -72,7 +72,18 @@ function createMatmulOperation(size, elementSize) {
                 rows: size,
                 cols: size,
                 // A[i][k] - row is i, col is k
-                getIndices: (iter) => ({ row: iter.i, col: iter.k })
+                getIndices: (iter) => ({ row: iter.i, col: iter.k }),
+                getTotalElements: () => size * size,
+                getLinearIndex: (iter, layout) => {
+                    const { row, col } = { row: iter.i, col: iter.k };
+                    return layout === 'col' ? col * size + row : row * size + col;
+                },
+                getCoordinatesFromLinear: (linearIdx, layout) => {
+                    if (layout === 'col') {
+                        return { row: linearIdx % size, col: Math.floor(linearIdx / size) };
+                    }
+                    return { row: Math.floor(linearIdx / size), col: linearIdx % size };
+                }
             },
             {
                 name: 'B',
@@ -80,7 +91,18 @@ function createMatmulOperation(size, elementSize) {
                 rows: size,
                 cols: size,
                 // B[k][j] - row is k, col is j
-                getIndices: (iter) => ({ row: iter.k, col: iter.j })
+                getIndices: (iter) => ({ row: iter.k, col: iter.j }),
+                getTotalElements: () => size * size,
+                getLinearIndex: (iter, layout) => {
+                    const { row, col } = { row: iter.k, col: iter.j };
+                    return layout === 'col' ? col * size + row : row * size + col;
+                },
+                getCoordinatesFromLinear: (linearIdx, layout) => {
+                    if (layout === 'col') {
+                        return { row: linearIdx % size, col: Math.floor(linearIdx / size) };
+                    }
+                    return { row: Math.floor(linearIdx / size), col: linearIdx % size };
+                }
             },
             {
                 name: 'C',
@@ -88,7 +110,18 @@ function createMatmulOperation(size, elementSize) {
                 rows: size,
                 cols: size,
                 // C[i][j] - row is i, col is j
-                getIndices: (iter) => ({ row: iter.i, col: iter.j })
+                getIndices: (iter) => ({ row: iter.i, col: iter.j }),
+                getTotalElements: () => size * size,
+                getLinearIndex: (iter, layout) => {
+                    const { row, col } = { row: iter.i, col: iter.j };
+                    return layout === 'col' ? col * size + row : row * size + col;
+                },
+                getCoordinatesFromLinear: (linearIdx, layout) => {
+                    if (layout === 'col') {
+                        return { row: linearIdx % size, col: Math.floor(linearIdx / size) };
+                    }
+                    return { row: Math.floor(linearIdx / size), col: linearIdx % size };
+                }
             }
         ],
 
@@ -207,6 +240,7 @@ function createConv2dOperation(config = {}) {
                     row: iter.h_out + iter.k_h,
                     col: iter.w_out + iter.k_w
                 }),
+                getTotalElements: () => inputH * inputW * channels_in,
                 getLinearIndex: (iter, layout) => {
                     const c = iter.c_in;
                     const h = iter.h_out + iter.k_h;
@@ -217,6 +251,19 @@ function createConv2dOperation(config = {}) {
                     }
                     // CHW (default): c * (H * W) + h * W + w
                     return c * (inputH * inputW) + h * inputW + w;
+                },
+                getCoordinatesFromLinear: (linearIdx, layout) => {
+                    if (layout === 'HWC') {
+                        const h = Math.floor(linearIdx / (inputW * channels_in));
+                        const w = Math.floor((linearIdx % (inputW * channels_in)) / channels_in);
+                        const c = linearIdx % channels_in;
+                        return { channel: c, row: h, col: w };
+                    }
+                    // CHW
+                    const c = Math.floor(linearIdx / (inputH * inputW));
+                    const h = Math.floor((linearIdx % (inputH * inputW)) / inputW);
+                    const w = linearIdx % inputW;
+                    return { channel: c, row: h, col: w };
                 }
             },
             {
@@ -240,6 +287,7 @@ function createConv2dOperation(config = {}) {
                     row: iter.k_h,
                     col: iter.k_w
                 }),
+                getTotalElements: () => kernelH * kernelW * channels_in * channels_out,
                 getLinearIndex: (iter, layout) => {
                     const o = iter.c_out;
                     const i = iter.c_in;
@@ -255,6 +303,25 @@ function createConv2dOperation(config = {}) {
                     return o * (channels_in * kernelH * kernelW) +
                            i * (kernelH * kernelW) +
                            h * kernelW + w;
+                },
+                getCoordinatesFromLinear: (linearIdx, layout) => {
+                    if (layout === 'HWIO') {
+                        const h = Math.floor(linearIdx / (kernelW * channels_in * channels_out));
+                        const remainder1 = linearIdx % (kernelW * channels_in * channels_out);
+                        const w = Math.floor(remainder1 / (channels_in * channels_out));
+                        const remainder2 = remainder1 % (channels_in * channels_out);
+                        const i = Math.floor(remainder2 / channels_out);
+                        const o = remainder2 % channels_out;
+                        return { c_out: o, c_in: i, row: h, col: w };
+                    }
+                    // OIHW
+                    const o = Math.floor(linearIdx / (channels_in * kernelH * kernelW));
+                    const remainder1 = linearIdx % (channels_in * kernelH * kernelW);
+                    const i = Math.floor(remainder1 / (kernelH * kernelW));
+                    const remainder2 = remainder1 % (kernelH * kernelW);
+                    const h = Math.floor(remainder2 / kernelW);
+                    const w = remainder2 % kernelW;
+                    return { c_out: o, c_in: i, row: h, col: w };
                 }
             },
             {
@@ -276,6 +343,7 @@ function createConv2dOperation(config = {}) {
                     row: iter.h_out,
                     col: iter.w_out
                 }),
+                getTotalElements: () => outputH * outputW * channels_out,
                 getLinearIndex: (iter, layout) => {
                     const c = iter.c_out;
                     const h = iter.h_out;
@@ -286,6 +354,19 @@ function createConv2dOperation(config = {}) {
                     }
                     // CHW (default): c * (H * W) + h * W + w
                     return c * (outputH * outputW) + h * outputW + w;
+                },
+                getCoordinatesFromLinear: (linearIdx, layout) => {
+                    if (layout === 'HWC') {
+                        const h = Math.floor(linearIdx / (outputW * channels_out));
+                        const w = Math.floor((linearIdx % (outputW * channels_out)) / channels_out);
+                        const c = linearIdx % channels_out;
+                        return { channel: c, row: h, col: w };
+                    }
+                    // CHW
+                    const c = Math.floor(linearIdx / (outputH * outputW));
+                    const h = Math.floor((linearIdx % (outputH * outputW)) / outputW);
+                    const w = linearIdx % outputW;
+                    return { channel: c, row: h, col: w };
                 }
             }
         ],
@@ -1510,9 +1591,23 @@ function getLinearIndex(row, col, layout) {
 }
 
 /**
+ * Check if an element is in cache given tensor and coordinates.
+ * Works for 2D, 3D, and 4D tensors.
+ */
+function isElementInCacheByCoords(tensor, coords) {
+    if (tensor.is4D) {
+        return isElementInCache4D(tensor, coords.c_out, coords.c_in, coords.row, coords.col);
+    } else if (tensor.is3D) {
+        return isElementInCache3D(tensor, coords.channel, coords.row, coords.col);
+    } else {
+        return isElementInCache2D(tensor, coords.row, coords.col);
+    }
+}
+
+/**
  * Render the memory layout visualization.
- * Shows linear address space for each matrix with cache residency.
- * Currently only supports matmul (2D tensors of equal size).
+ * Shows linear address space for each tensor with cache residency.
+ * Supports both 2D tensors (matmul) and 3D/4D tensors (conv2d).
  */
 function renderMemoryLayout() {
     const canvas = ctxMemoryLayout.canvas;
@@ -1523,23 +1618,15 @@ function renderMemoryLayout() {
     ctxMemoryLayout.fillStyle = '#1a1a2e';
     ctxMemoryLayout.fillRect(0, 0, width, height);
 
-    // Memory layout visualization only supports matmul currently
-    // Conv2d tensors have different shapes (3D, 4D) which need a different visualization
-    if (operation.name !== 'matmul') {
-        ctxMemoryLayout.fillStyle = '#666';
-        ctxMemoryLayout.font = '12px sans-serif';
-        ctxMemoryLayout.fillText('Memory layout visualization not available for ' + operation.displayName, 10, height / 2 + 4);
-        return;
-    }
-
     const numTensors = operation.tensors.length;
-    const size = operation.size;
-    const numElements = size * size;  // 144 elements per matrix
+
+    // Calculate total elements across all tensors for proportional sizing
+    const tensorSizes = operation.tensors.map(t => t.getTotalElements());
+    const maxElements = Math.max(...tensorSizes);
 
     const rowHeight = height / numTensors;
-    const labelOffset = 15;
+    const labelOffset = 45;  // Space for tensor names
     const barWidth = width - labelOffset;
-    const elemWidth = barWidth / numElements;
 
     // Get current iteration for highlighting
     const iter = state.iterations[state.currentIteration];
@@ -1548,35 +1635,32 @@ function renderMemoryLayout() {
     operation.tensors.forEach((tensor, tensorIdx) => {
         const y = tensorIdx * rowHeight;
         const layout = state.layouts[tensor.name];
+        const numElements = tensor.getTotalElements();
+        // All tensors use the same element width for visual consistency
+        const elemWidth = barWidth / maxElements;
+
+        const xStart = labelOffset;
 
         // Label
-        ctxMemoryLayout.fillStyle = '#666';
-        ctxMemoryLayout.font = '10px monospace';
+        ctxMemoryLayout.fillStyle = '#888';
+        ctxMemoryLayout.font = '9px monospace';
         ctxMemoryLayout.fillText(tensor.name, 2, y + rowHeight / 2 + 3);
 
         // Current access position (linear index)
         let currentLinearIndex = -1;
         if (iter) {
-            const indices = tensor.getIndices(iter);
-            currentLinearIndex = getLinearIndex(indices.row, indices.col, layout);
+            currentLinearIndex = tensor.getLinearIndex(iter, layout);
         }
 
         // Draw each element
         for (let linearIdx = 0; linearIdx < numElements; linearIdx++) {
-            const x = labelOffset + linearIdx * elemWidth;
+            const x = xStart + linearIdx * elemWidth;
 
-            // Convert linear index back to row/col based on layout
-            let row, col;
-            if (layout === 'col') {
-                col = Math.floor(linearIdx / size);
-                row = linearIdx % size;
-            } else {
-                row = Math.floor(linearIdx / size);
-                col = linearIdx % size;
-            }
+            // Convert linear index back to coordinates
+            const coords = tensor.getCoordinatesFromLinear(linearIdx, layout);
 
             // Check if this element is in cache
-            const inCache = isElementInCache2D(tensor, row, col);
+            const inCache = isElementInCacheByCoords(tensor, coords);
 
             // Draw element
             if (linearIdx === currentLinearIndex) {
@@ -1602,12 +1686,21 @@ function renderMemoryLayout() {
         ctxMemoryLayout.strokeStyle = '#555';
         ctxMemoryLayout.lineWidth = 1;
         for (let lineStart = 0; lineStart <= numElements; lineStart += elementsPerLine) {
-            const x = labelOffset + lineStart * elemWidth;
+            const x = xStart + lineStart * elemWidth;
             ctxMemoryLayout.beginPath();
             ctxMemoryLayout.moveTo(x, y + 1);
             ctxMemoryLayout.lineTo(x, y + rowHeight - 1);
             ctxMemoryLayout.stroke();
         }
+
+        // Draw tensor boundary (vertical line at end of tensor memory)
+        const xEnd = xStart + numElements * elemWidth;
+        ctxMemoryLayout.strokeStyle = '#888';
+        ctxMemoryLayout.lineWidth = 2;
+        ctxMemoryLayout.beginPath();
+        ctxMemoryLayout.moveTo(xEnd, y + 1);
+        ctxMemoryLayout.lineTo(xEnd, y + rowHeight - 1);
+        ctxMemoryLayout.stroke();
     });
 }
 

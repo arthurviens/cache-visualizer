@@ -640,3 +640,165 @@ describe('Conv2D Linear Index Calculation', () => {
         assert.strictEqual(linearIdx, 94);
     });
 });
+
+// =============================================================================
+// Tensor getTotalElements
+// =============================================================================
+
+describe('Tensor getTotalElements', () => {
+    it('matmul tensors: 12x12 = 144 elements each', () => {
+        const op = createMatmulOperation(12, 4);
+        for (const tensor of op.tensors) {
+            assert.strictEqual(tensor.getTotalElements(), 144, `${tensor.name} should have 144 elements`);
+        }
+    });
+
+    it('conv2d Input tensor: 4 channels * 8 * 8 = 256 elements', () => {
+        const op = createConv2dOperation();
+        const input = op.tensors[0];
+        assert.strictEqual(input.getTotalElements(), 256);
+    });
+
+    it('conv2d Kernel tensor: 4 * 4 * 3 * 3 = 144 elements', () => {
+        const op = createConv2dOperation();
+        const kernel = op.tensors[1];
+        assert.strictEqual(kernel.getTotalElements(), 144);
+    });
+
+    it('conv2d Output tensor: 4 channels * 6 * 6 = 144 elements', () => {
+        const op = createConv2dOperation();
+        const output = op.tensors[2];
+        assert.strictEqual(output.getTotalElements(), 144);
+    });
+});
+
+// =============================================================================
+// Tensor getCoordinatesFromLinear (inverse of getLinearIndex)
+// =============================================================================
+
+describe('Tensor getCoordinatesFromLinear', () => {
+    describe('Matmul tensors (2D)', () => {
+        const op = createMatmulOperation(12, 4);
+        const [A, B, C] = op.tensors;
+        const layout = 'row'; // Default layout for matmul
+
+        it('Matrix A: inverse of getLinearIndex', () => {
+            // Test several positions. A[i][k] accesses via i, k
+            for (let row = 0; row < 12; row += 3) {
+                for (let col = 0; col < 12; col += 4) {
+                    const iter = { i: row, j: 0, k: col };
+                    const linearIdx = A.getLinearIndex(iter, layout);
+                    const coords = A.getCoordinatesFromLinear(linearIdx, layout);
+                    assert.strictEqual(coords.row, row, `row mismatch at linear ${linearIdx}`);
+                    assert.strictEqual(coords.col, col, `col mismatch at linear ${linearIdx}`);
+                }
+            }
+        });
+
+        it('Matrix B: inverse of getLinearIndex', () => {
+            // B[k][j] accesses via k, j
+            for (let row = 0; row < 12; row += 3) {
+                for (let col = 0; col < 12; col += 4) {
+                    const iter = { i: 0, j: col, k: row };
+                    const linearIdx = B.getLinearIndex(iter, layout);
+                    const coords = B.getCoordinatesFromLinear(linearIdx, layout);
+                    assert.strictEqual(coords.row, row, `row mismatch at linear ${linearIdx}`);
+                    assert.strictEqual(coords.col, col, `col mismatch at linear ${linearIdx}`);
+                }
+            }
+        });
+
+        it('Matrix C: inverse of getLinearIndex', () => {
+            // C[i][j] accesses via i, j
+            for (let row = 0; row < 12; row += 3) {
+                for (let col = 0; col < 12; col += 4) {
+                    const iter = { i: row, j: col, k: 0 };
+                    const linearIdx = C.getLinearIndex(iter, layout);
+                    const coords = C.getCoordinatesFromLinear(linearIdx, layout);
+                    assert.strictEqual(coords.row, row, `row mismatch at linear ${linearIdx}`);
+                    assert.strictEqual(coords.col, col, `col mismatch at linear ${linearIdx}`);
+                }
+            }
+        });
+    });
+
+    describe('Conv2d tensors (3D/4D)', () => {
+        const op = createConv2dOperation();
+        const [input, kernel, output] = op.tensors;
+
+        it('Input tensor (3D CHW): inverse of getLinearIndex', () => {
+            // Test several positions across channels and spatial dims
+            for (let c = 0; c < 4; c += 2) {
+                for (let h = 0; h < 8; h += 3) {
+                    for (let w = 0; w < 8; w += 3) {
+                        const iter = { c_in: c, h_out: h, w_out: w, k_h: 0, k_w: 0, c_out: 0 };
+                        const linearIdx = input.getLinearIndex(iter);
+                        const coords = input.getCoordinatesFromLinear(linearIdx);
+                        assert.strictEqual(coords.channel, c, `channel mismatch at linear ${linearIdx}`);
+                        assert.strictEqual(coords.row, h, `row mismatch at linear ${linearIdx}`);
+                        assert.strictEqual(coords.col, w, `col mismatch at linear ${linearIdx}`);
+                    }
+                }
+            }
+        });
+
+        it('Kernel tensor (4D OIHW): inverse of getLinearIndex', () => {
+            // Test several positions
+            for (let c_out = 0; c_out < 4; c_out += 2) {
+                for (let c_in = 0; c_in < 4; c_in += 2) {
+                    for (let kh = 0; kh < 3; kh++) {
+                        for (let kw = 0; kw < 3; kw++) {
+                            const iter = { c_out, c_in, k_h: kh, k_w: kw, h_out: 0, w_out: 0 };
+                            const linearIdx = kernel.getLinearIndex(iter);
+                            const coords = kernel.getCoordinatesFromLinear(linearIdx);
+                            assert.strictEqual(coords.c_out, c_out, `c_out mismatch at linear ${linearIdx}`);
+                            assert.strictEqual(coords.c_in, c_in, `c_in mismatch at linear ${linearIdx}`);
+                            assert.strictEqual(coords.row, kh, `row mismatch at linear ${linearIdx}`);
+                            assert.strictEqual(coords.col, kw, `col mismatch at linear ${linearIdx}`);
+                        }
+                    }
+                }
+            }
+        });
+
+        it('Output tensor (3D CHW): inverse of getLinearIndex', () => {
+            for (let c = 0; c < 4; c += 2) {
+                for (let h = 0; h < 6; h += 2) {
+                    for (let w = 0; w < 6; w += 2) {
+                        const iter = { c_out: c, h_out: h, w_out: w, c_in: 0, k_h: 0, k_w: 0 };
+                        const linearIdx = output.getLinearIndex(iter);
+                        const coords = output.getCoordinatesFromLinear(linearIdx);
+                        assert.strictEqual(coords.channel, c, `channel mismatch at linear ${linearIdx}`);
+                        assert.strictEqual(coords.row, h, `row mismatch at linear ${linearIdx}`);
+                        assert.strictEqual(coords.col, w, `col mismatch at linear ${linearIdx}`);
+                    }
+                }
+            }
+        });
+    });
+
+    it('exhaustive check: all linear indices map back correctly for matmul A', () => {
+        const op = createMatmulOperation(12, 4);
+        const A = op.tensors[0];
+        const layout = 'row';
+        const total = A.getTotalElements();
+        for (let i = 0; i < total; i++) {
+            const coords = A.getCoordinatesFromLinear(i, layout);
+            // Reconstruct linear index from coords (row-major: row * cols + col)
+            const reconstructed = coords.row * 12 + coords.col;
+            assert.strictEqual(reconstructed, i, `linear index ${i} failed round-trip`);
+        }
+    });
+
+    it('exhaustive check: all linear indices map back correctly for conv2d output', () => {
+        const op = createConv2dOperation();
+        const output = op.tensors[2];
+        const total = output.getTotalElements();
+        for (let i = 0; i < total; i++) {
+            const coords = output.getCoordinatesFromLinear(i);
+            // Reconstruct: channel * (6 * 6) + row * 6 + col
+            const reconstructed = coords.channel * 36 + coords.row * 6 + coords.col;
+            assert.strictEqual(reconstructed, i, `linear index ${i} failed round-trip`);
+        }
+    });
+});
