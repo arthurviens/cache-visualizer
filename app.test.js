@@ -11,9 +11,9 @@
  * Run with: npm test
  */
 
-const { describe, it } = require('node:test');
-const assert = require('node:assert');
-const {
+import { describe, it } from 'node:test';
+import assert from 'node:assert';
+import {
     createMatmulOperation,
     createConv2dOperation,
     generateIterations,
@@ -21,7 +21,7 @@ const {
     CacheSimulator,
     getLinearIndex,
     getTensorAddress
-} = require('./app.js');
+} from './src/main.js';
 
 // =============================================================================
 // Operation Definition
