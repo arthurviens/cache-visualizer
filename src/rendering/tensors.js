@@ -51,6 +51,7 @@ export function getTensorCanvasSize(tensor) {
 
 /**
  * Check if element is in cache for 2D tensor.
+ * @returns {number | null} Cache level if cached, null if not
  */
 export function isElementInCache2D(tensor, row, col, cache, layouts, elementSize) {
     const layout = layouts[tensor.name];
@@ -67,6 +68,7 @@ export function isElementInCache2D(tensor, row, col, cache, layouts, elementSize
 
 /**
  * Check if element is in cache for 3D tensor.
+ * @returns {number | null} Cache level if cached, null if not
  */
 export function isElementInCache3D(tensor, channel, row, col, cache, layouts, elementSize) {
     const layout = layouts[tensor.name];
@@ -84,6 +86,7 @@ export function isElementInCache3D(tensor, channel, row, col, cache, layouts, el
 
 /**
  * Check if element is in cache for 4D tensor (kernel).
+ * @returns {number | null} Cache level if cached, null if not
  */
 export function isElementInCache4D(tensor, c_out, c_in, row, col, cache, layouts, elementSize) {
     const layout = layouts[tensor.name];
@@ -105,6 +108,7 @@ export function isElementInCache4D(tensor, c_out, c_in, row, col, cache, layouts
 
 /**
  * Check if an element is in cache given tensor and coordinates.
+ * @returns {number | null} Cache level if cached, null if not
  */
 export function isElementInCacheByCoords(tensor, coords, cache, layouts, elementSize) {
     if (tensor.is4D) {

@@ -129,7 +129,7 @@ function executeStep() {
 
     for (const tensor of operation.tensors) {
         const address = getAccessAddress(tensor, iter, state.layouts, operation.elementSize);
-        const hit = state.cache.access(address);
+        const { hit } = state.cache.access(address);
 
         state.stats[tensor.name].accesses++;
         state.stats[tensor.name].hits += hit ? 1 : 0;

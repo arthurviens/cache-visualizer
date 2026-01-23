@@ -237,25 +237,37 @@ describe('Cache Simulator', () => {
         const cache = new CacheSimulator(64, 16);
         assert.strictEqual(cache.maxLines, 4);
         assert.strictEqual(cache.lines.length, 0);
+        assert.strictEqual(cache.level, 1);  // Default level
+    });
+
+    it('accepts custom cache level', () => {
+        const cache = new CacheSimulator(64, 16, 2);
+        assert.strictEqual(cache.level, 2);
     });
 
     it('first access is a miss', () => {
         const cache = new CacheSimulator(64, 16);
-        assert.strictEqual(cache.access(0), false);
+        const result = cache.access(0);
+        assert.strictEqual(result.hit, false);
+        assert.strictEqual(result.level, null);
         assert.strictEqual(cache.misses, 1);
     });
 
-    it('same cache line is a hit', () => {
-        const cache = new CacheSimulator(64, 16);
+    it('same cache line is a hit with level info', () => {
+        const cache = new CacheSimulator(64, 16, 1);
         cache.access(0);
-        assert.strictEqual(cache.access(4), true);  // Same line (0-15)
+        const result = cache.access(4);  // Same line (0-15)
+        assert.strictEqual(result.hit, true);
+        assert.strictEqual(result.level, 1);
         assert.strictEqual(cache.hits, 1);
     });
 
     it('different cache line is a miss', () => {
         const cache = new CacheSimulator(64, 16);
         cache.access(0);
-        assert.strictEqual(cache.access(16), false);  // Different line
+        const result = cache.access(16);  // Different line
+        assert.strictEqual(result.hit, false);
+        assert.strictEqual(result.level, null);
         assert.strictEqual(cache.misses, 2);
     });
 
@@ -265,9 +277,9 @@ describe('Cache Simulator', () => {
         cache.access(16);
         cache.access(32);  // Evicts line 0
 
-        assert.strictEqual(cache.isAddressCached(0), false);
-        assert.strictEqual(cache.isAddressCached(16), true);
-        assert.strictEqual(cache.isAddressCached(32), true);
+        assert.strictEqual(cache.isAddressCached(0), null);
+        assert.strictEqual(cache.isAddressCached(16), 1);
+        assert.strictEqual(cache.isAddressCached(32), 1);
     });
 
     it('access updates LRU order', () => {
@@ -277,8 +289,16 @@ describe('Cache Simulator', () => {
         cache.access(0);   // Touch line 0, now line 16 is LRU
         cache.access(32);  // Evicts line 16
 
-        assert.strictEqual(cache.isAddressCached(0), true);
-        assert.strictEqual(cache.isAddressCached(16), false);
+        assert.strictEqual(cache.isAddressCached(0), 1);
+        assert.strictEqual(cache.isAddressCached(16), null);
+    });
+
+    it('isAddressCached returns level when cached', () => {
+        const cache = new CacheSimulator(64, 16, 3);  // L3 cache
+        cache.access(0);
+        assert.strictEqual(cache.isAddressCached(0), 3);
+        assert.strictEqual(cache.isAddressCached(4), 3);  // Same line
+        assert.strictEqual(cache.isAddressCached(16), null);  // Different line
     });
 
     it('aligns addresses to line boundary', () => {
@@ -311,8 +331,8 @@ describe('Cache Simulator', () => {
         cache.restore(snap);
 
         assert.strictEqual(cache.lines.length, 2);
-        assert.strictEqual(cache.isAddressCached(0), true);
-        assert.strictEqual(cache.isAddressCached(32), false);
+        assert.strictEqual(cache.isAddressCached(0), 1);
+        assert.strictEqual(cache.isAddressCached(32), null);
     });
 });
 
@@ -327,10 +347,10 @@ describe('Cache Behavior', () => {
         cache.access(576);   // Tensor B
         cache.access(1152);  // Tensor C
 
-        // All still cached
-        assert.strictEqual(cache.isAddressCached(0), true);
-        assert.strictEqual(cache.isAddressCached(576), true);
-        assert.strictEqual(cache.isAddressCached(1152), true);
+        // All still cached (returns level, not boolean)
+        assert.strictEqual(cache.isAddressCached(0), 1);
+        assert.strictEqual(cache.isAddressCached(576), 1);
+        assert.strictEqual(cache.isAddressCached(1152), 1);
     });
 
     it('spatial locality within cache line', () => {
@@ -339,10 +359,12 @@ describe('Cache Behavior', () => {
 
         // Elements 1-7 should hit
         for (let i = 1; i < 8; i++) {
-            assert.strictEqual(cache.access(i * 4), true, `element ${i}`);
+            const result = cache.access(i * 4);
+            assert.strictEqual(result.hit, true, `element ${i}`);
         }
         // Element 8 is different line
-        assert.strictEqual(cache.access(32), false);
+        const result = cache.access(32);
+        assert.strictEqual(result.hit, false);
     });
 });
 
@@ -397,19 +419,20 @@ describe('Tensor Address Calculation', () => {
         cache.access(addrA00);
 
         // Element A[0][5] should be in same cache line (row-major, elements 0-15 in line)
+        // isAddressCached now returns level (1) or null
         const addrA05 = getTensorAddress(tensorA, 0, 5, 'row');
-        assert.ok(cache.isAddressCached(addrA05), 'A[0][5] should be cached');
+        assert.strictEqual(cache.isAddressCached(addrA05), 1, 'A[0][5] should be cached');
 
         // Element A[1][0] is in a different cache line (element 12 in linear order)
         // Actually, A[1][0] is at linear index 12, which is 48 bytes from start
         // Cache line is 64 bytes, so 0-63 are in one line
         // A[1][0] is at offset 12*4 = 48, still in first line
         const addrA10 = getTensorAddress(tensorA, 1, 0, 'row');
-        assert.ok(cache.isAddressCached(addrA10), 'A[1][0] should be cached (same 64B line)');
+        assert.strictEqual(cache.isAddressCached(addrA10), 1, 'A[1][0] should be cached (same 64B line)');
 
         // Element B[0][0] is NOT cached (different tensor, different address)
         const addrB00 = getTensorAddress(tensorB, 0, 0, 'row');
-        assert.ok(!cache.isAddressCached(addrB00), 'B[0][0] should not be cached');
+        assert.strictEqual(cache.isAddressCached(addrB00), null, 'B[0][0] should not be cached');
     });
 });
 
